@@ -1,0 +1,19 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Auth/session
+auth/auth.json
+
+# Logs
+logs/
+
+# Excel output
+output/
+
+# Tracker data
+data/
+
+# macOS
+.DS_Store
