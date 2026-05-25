@@ -60,10 +60,28 @@ BODY_SELECTORS = [
 
 
 # ==========================================
+# TEST MODE
+# ==========================================
+
+TEST_MODE = True
+
+
+# ==========================================
 # WEEKEND CHECK
 # ==========================================
 
 def within_weekend_window():
+
+    # ======================================
+    # TEST MODE
+    # ======================================
+
+    if TEST_MODE:
+        return True
+
+    # ======================================
+    # ORIGINAL WEEKEND LOGIC
+    # ======================================
 
     now = datetime.now()
 
@@ -146,7 +164,7 @@ def extract_body(page):
 
 
 # ==========================================
-# BETTER SUBJECT EXTRACTION
+# SUBJECT EXTRACTION
 # ==========================================
 
 def extract_subject_from_row(row_text):
@@ -185,19 +203,33 @@ def extract_subject_from_row(row_text):
     if not candidate_lines:
         return ""
 
+    # PREFER LINES WITH CASE NUMBER
+
+    for line in candidate_lines:
+
+        if re.search(
+            r'\b\d{4}-\d{3,5}-\d{4,}\b',
+            line
+        ):
+
+            return re.sub(
+                r'\s+',
+                ' ',
+                line
+            ).strip()
+
+    # OTHERWISE LONGEST LINE
+
     candidate_lines.sort(
         key=lambda x: len(x),
         reverse=True
     )
 
-    subject = candidate_lines[0]
-
-    subject = subject.replace("\r", " ")
-    subject = subject.replace("\n", " ")
-
-    subject = re.sub(r'\s+', ' ', subject)
-
-    return subject.strip()
+    return re.sub(
+        r'\s+',
+        ' ',
+        candidate_lines[0]
+    ).strip()
 
 
 # ==========================================
@@ -212,18 +244,42 @@ def process_visible_mails(page):
 
     count = mails.count()
 
-    print(f"Visible mails: {count}")
+    print(f"\nVisible mails: {count}")
+
+    if count == 0:
+
+        print(
+            "Inbox appears empty -> reloading"
+        )
+
+        page.reload()
+
+        page.wait_for_timeout(8000)
+
+        return
 
     for i in range(min(count, 30)):
 
         try:
 
-            mail = mails.nth(i)
+            # RE-QUERY EACH LOOP
+            # PREVENT STALE ELEMENTS
+
+            mail = page.locator(
+                "div[role='option']"
+            ).nth(i)
+
+            try:
+
+                mail.scroll_into_view_if_needed()
+
+            except:
+                pass
 
             try:
 
                 row_text = mail.inner_text(
-                    timeout=3000
+                    timeout=5000
                 )
 
             except:
@@ -259,14 +315,26 @@ def process_visible_mails(page):
             if should_skip_mail(subject):
 
                 print(
-                    "Skipped reply"
+                    "Skipped reply mail"
                 )
 
                 continue
 
-            unique_id = (
-                subject.lower().strip()
+            details = (
+                extract_case_details(
+                    subject,
+                    timestamp=datetime.now()
+                    .strftime("%d-%b-%y")
+                )
             )
+
+            unique_id = (
+
+                details["Case#"]
+                + "_"
+                + details["Case Delivery Type"]
+
+            ).lower().strip()
 
             if already_processed(
                 unique_id
@@ -282,22 +350,34 @@ def process_visible_mails(page):
                 "\nOpening mail..."
             )
 
-            mail.click()
+            try:
+
+                mail.click(
+                    timeout=5000
+                )
+
+            except:
+
+                print(
+                    "Retrying click..."
+                )
+
+                page.wait_for_timeout(2000)
+
+                mail.click(
+                    timeout=5000
+                )
 
             page.wait_for_timeout(2500)
 
             body = extract_body(page)
 
-            timestamp = (
-                datetime.now()
-                .strftime("%d-%b-%y")
-            )
-
             details = (
                 extract_case_details(
                     subject,
                     body,
-                    timestamp=timestamp
+                    timestamp=datetime.now()
+                    .strftime("%d-%b-%y")
                 )
             )
 
@@ -374,6 +454,10 @@ def run_mail_reader():
 
         page = context.new_page()
 
+        print(
+            "\nOpening Outlook..."
+        )
+
         page.goto(
 
             "https://outlook.office.com/mail",
@@ -381,17 +465,41 @@ def run_mail_reader():
             wait_until="domcontentloaded"
         )
 
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(10000)
 
-        print("Outlook loaded")
+        print(
+            "\nOutlook loaded successfully"
+        )
+
+        loop_count = 0
 
         while True:
 
             try:
 
+                # ==================================
+                # AUTO REFRESH EVERY 10 MINUTES
+                # ==================================
+
+                if loop_count % 20 == 0:
+
+                    print(
+                        "\nRefreshing Outlook..."
+                    )
+
+                    page.reload()
+
+                    page.wait_for_timeout(8000)
+
                 if within_weekend_window():
 
-                    process_visible_mails(page)
+                    print(
+                        "\nChecking mailbox..."
+                    )
+
+                    process_visible_mails(
+                        page
+                    )
 
                     page.mouse.wheel(
                         0,
@@ -406,12 +514,29 @@ def run_mail_reader():
                         "Outside weekend window"
                     )
 
+                loop_count += 1
+
                 time.sleep(30)
 
             except Exception as e:
 
                 logger.error(str(e))
 
+                print(
+                    "\nMain Loop Error:"
+                )
+
                 print(e)
+
+                try:
+
+                    page.reload()
+
+                    page.wait_for_timeout(
+                        10000
+                    )
+
+                except:
+                    pass
 
                 time.sleep(30)

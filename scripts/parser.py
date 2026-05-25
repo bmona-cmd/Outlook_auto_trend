@@ -1,11 +1,14 @@
 import re
-from difflib import SequenceMatcher
 
 from vertical_lookup import (
     get_vertical,
     vertical_map
 )
 
+
+# ==========================================
+# TECHNOLOGY MAP
+# ==========================================
 
 DEVICE_TECH_MAP = {
 
@@ -26,6 +29,53 @@ DEVICE_TECH_MAP = {
     "software": "Software"
 }
 
+
+# ==========================================
+# STOP WORDS
+# ==========================================
+
+STOP_WORDS = [
+
+    "interface",
+    "packet",
+    "drops",
+    "drop",
+    "flap",
+    "flapping",
+    "error",
+    "errors",
+    "issue",
+    "failure",
+    "problem",
+    "queue",
+    "dispatch",
+    "handover",
+    "latency",
+    "routing",
+    "switching",
+    "security",
+    "wireless",
+    "vpn",
+    "bgp",
+    "ospf",
+    "link",
+    "down",
+    "unstable",
+    "alarm",
+    "alerts",
+    "investigation",
+    "crc",
+    "peer",
+    "notice",
+    "monitoring",
+    "case",
+    "reminder"
+]
+
+
+# ==========================================
+# SKIP REPLY MAILS
+# ==========================================
 
 SKIP_KEYWORDS = [
 
@@ -50,14 +100,32 @@ def clean_subject(subject):
 
     subject = str(subject)
 
-    subject = subject.replace(
-        "\n",
-        " "
+    subject = subject.replace("\n", " ")
+    subject = subject.replace("\r", " ")
+
+    subject = re.sub(
+        r'\s+',
+        ' ',
+        subject
     )
 
-    subject = subject.replace(
-        "\r",
-        " "
+    return subject.strip()
+
+
+# ==========================================
+# NORMALIZE SUBJECT
+# ==========================================
+
+def normalize_subject(subject):
+
+    subject = clean_subject(subject)
+
+    subject = subject.lower()
+
+    subject = re.sub(
+        r'[\|\:\,\-\/\[\]\(\)_]+',
+        ' ',
+        subject
     )
 
     subject = re.sub(
@@ -70,7 +138,7 @@ def clean_subject(subject):
 
 
 # ==========================================
-# SKIP REPLY MAILS
+# SKIP MAIL CHECK
 # ==========================================
 
 def should_skip_mail(subject):
@@ -93,9 +161,7 @@ def should_skip_mail(subject):
 
 def extract_case_number(subject):
 
-    subject = clean_subject(
-        subject
-    )
+    subject = clean_subject(subject)
 
     patterns = [
 
@@ -136,7 +202,7 @@ def extract_priority(subject):
 
 
 # ==========================================
-# DELIVERY TYPE
+# MAIL TYPE
 # ==========================================
 
 def extract_mail_type(subject):
@@ -159,7 +225,7 @@ def extract_mail_type(subject):
 
 
 # ==========================================
-# TECHNOLOGY
+# TECHNOLOGY EXTRACTION
 # ==========================================
 
 def extract_technology(subject, body=""):
@@ -186,55 +252,86 @@ def extract_technology(subject, body=""):
     return ""
 
 
-
 # ==========================================
-# FUZZY SIMILARITY
+# REMOVE KNOWN METADATA
 # ==========================================
 
-def similarity(a, b):
+def remove_known_patterns(text):
 
-    return SequenceMatcher(
-        None,
-        a.lower(),
-        b.lower()
-    ).ratio()
+    text = normalize_subject(text)
 
+    # REMOVE CASE NUMBERS
+
+    text = re.sub(
+        r'\b\d{4}-\d{3,5}-\d{4,}\b',
+        ' ',
+        text
+    )
+
+    # REMOVE PRIORITY
+
+    text = re.sub(
+        r'\bp[1-5]\b',
+        ' ',
+        text
+    )
+
+    # REMOVE DELIVERY WORDS
+
+    text = re.sub(
+        r'\bdispatch\b',
+        ' ',
+        text
+    )
+
+    text = re.sub(
+        r'\bhandover\b',
+        ' ',
+        text
+    )
+
+    text = re.sub(
+        r'\bho\b',
+        ' ',
+        text
+    )
+
+    # REMOVE DEVICE NAMES
+
+    for keyword in DEVICE_TECH_MAP.keys():
+
+        text = re.sub(
+            rf'\b{keyword}\d*\b',
+            ' ',
+            text
+        )
+
+    text = re.sub(
+        r'\s+',
+        ' ',
+        text
+    )
+
+    return text.strip()
 
 
 # ==========================================
 # CUSTOMER EXTRACTION
-# RETURNS CUSTOMER TEXT FROM SUBJECT
 # ==========================================
 
 def extract_customer(subject):
 
-    subject = clean_subject(
-        subject
-    )
-
     if not subject:
         return ""
 
-    lower_subject = subject.lower()
-
-    normalized_subject = re.sub(
-        r'[\|\:\,\-\/]+',
-        ' ',
-        lower_subject
+    cleaned = remove_known_patterns(
+        subject
     )
 
-    normalized_subject = re.sub(
-        r'\s+',
-        ' ',
-        normalized_subject
-    ).strip()
+    tokens = cleaned.split()
 
-    best_match = ""
-    best_score = 0
-
-    extracted_customer = ""
-
-    subject_tokens = normalized_subject.split()
+    best_customer = ""
+    best_match_length = 0
 
     for excel_customer in vertical_map.keys():
 
@@ -248,298 +345,150 @@ def extract_customer(subject):
             excel_customer_clean.split()
         )
 
-        # =====================================
+        # ==================================
         # DIRECT CONTAINMENT
-        # =====================================
+        # ==================================
 
-        if excel_customer_clean in normalized_subject:
+        if excel_customer_clean in cleaned:
 
-            if len(excel_customer_clean) > len(best_match):
+            start_index = cleaned.find(
+                excel_customer_clean
+            )
 
-                best_match = excel_customer_clean
-                best_score = 1.0
+            remaining = cleaned[
+                start_index:
+            ]
 
-                start_index = normalized_subject.find(
-                    excel_customer_clean
+            extracted_words = []
+
+            for word in remaining.split():
+
+                if word.lower() in STOP_WORDS:
+                    break
+
+                extracted_words.append(word)
+
+            extracted_customer = (
+                " ".join(extracted_words)
+            ).strip()
+
+            if (
+                len(extracted_customer)
+                >
+                best_match_length
+            ):
+
+                best_customer = (
+                    extracted_customer
                 )
 
-                remaining = normalized_subject[
-                    start_index:
-                ]
+                best_match_length = (
+                    len(extracted_customer)
+                )
 
-                extracted_customer = remaining.split(
-                    "|"
-                )[0].strip()
-
-        # =====================================
+        # ==================================
         # TOKEN OVERLAP
-        # =====================================
+        # ==================================
 
-        common_words = (
+        else:
 
-            set(subject_tokens)
-            &
-            set(customer_words)
-        )
+            common_words = (
 
-        if common_words:
-
-            overlap_ratio = (
-                len(common_words)
-                /
-                len(customer_words)
+                set(tokens)
+                &
+                set(customer_words)
             )
+
+            overlap_ratio = 0
+
+            if customer_words:
+
+                overlap_ratio = (
+
+                    len(common_words)
+                    /
+                    len(customer_words)
+                )
 
             if overlap_ratio >= 0.6:
 
-                if overlap_ratio > best_score:
+                extracted_words = []
 
-                    best_match = excel_customer_clean
-                    best_score = overlap_ratio
+                started = False
 
-                    matched_words = []
+                for token in tokens:
 
-                    for token in subject_tokens:
+                    if (
+                        token in common_words
+                        or started
+                    ):
 
-                        if (
-                            token in common_words
-                            or
-                            len(matched_words) > 0
-                        ):
+                        started = True
 
-                            matched_words.append(
-                                token
-                            )
+                        if token.lower() in STOP_WORDS:
+                            break
 
-                            if len(matched_words) >= 4:
-                                break
-
-                    extracted_customer = (
-                        " ".join(matched_words)
-                    )
-
-        # =====================================
-        # FUZZY MATCH
-        # =====================================
-
-        ratio = similarity(
-            normalized_subject,
-            excel_customer_clean
-        )
-
-        if ratio >= 0.82:
-
-            if ratio > best_score:
-
-                best_match = excel_customer_clean
-                best_score = ratio
+                        extracted_words.append(
+                            token
+                        )
 
                 extracted_customer = (
-                    excel_customer_clean
-                )
+                    " ".join(extracted_words)
+                ).strip()
 
-    if extracted_customer:
+                if (
+                    len(extracted_customer)
+                    >
+                    best_match_length
+                ):
 
-        extracted_customer = re.sub(
-            r'\s+',
-            ' ',
-            extracted_customer
-        ).strip()
+                    best_customer = (
+                        extracted_customer
+                    )
 
-        extracted_customer = extracted_customer.title()
+                    best_match_length = (
+                        len(extracted_customer)
+                    )
 
-        # REMOVE TRAILING GARBAGE
+    best_customer = re.sub(
+        r'\s+',
+        ' ',
+        best_customer
+    ).strip()
 
-        garbage = [
+    return best_customer.title()
 
-            "queue",
-            "dispatch",
-            "handover",
-            "interface",
-            "packet",
-            "flap",
-            "errors",
-            "drops",
-            "failure",
-            "notice"
-        ]
 
-        cleaned_words = []
+# ==========================================
+# VERTICAL EXTRACTION
+# ==========================================
 
-        for word in extracted_customer.split():
+def extract_vertical(customer):
 
-            if word.lower() in garbage:
-                break
+    if not customer:
+        return ""
 
-            cleaned_words.append(word)
+    lower_customer = (
+        customer.lower()
+        .strip()
+    )
 
-        extracted_customer = (
-            " ".join(cleaned_words)
-        ).strip()
+    for company in vertical_map.keys():
 
-        return extracted_customer
+        if company in lower_customer:
+
+            return get_vertical(company)
 
     return ""
-
 
 
 # ==========================================
 # COMMENTS
 # ==========================================
 
-def extract_comments(subject, customer=""):
+def extract_comments():
 
-    subject = clean_subject(
-        subject
-    )
-
-    if not subject:
-        return ""
-
-    working = subject
-
-    # REMOVE CASE NUMBER
-
-    case_number = extract_case_number(
-        working
-    )
-
-    if case_number:
-
-        working = working.replace(
-            case_number,
-            " "
-        )
-
-    # REMOVE PRIORITY
-
-    priority = extract_priority(
-        working
-    )
-
-    if priority:
-
-        working = re.sub(
-            rf'\b{priority}\b',
-            ' ',
-            working,
-            flags=re.IGNORECASE
-        )
-
-    # REMOVE DELIVERY TYPE
-
-    mail_type = extract_mail_type(
-        working
-    )
-
-    if mail_type:
-
-        working = re.sub(
-            mail_type,
-            ' ',
-            working,
-            flags=re.IGNORECASE
-        )
-
-    # REMOVE CUSTOMER
-
-    if customer:
-
-        working = re.sub(
-            re.escape(customer),
-            ' ',
-            working,
-            flags=re.IGNORECASE
-        )
-
-    # REMOVE DEVICE NAMES
-
-    for keyword in DEVICE_TECH_MAP.keys():
-
-        working = re.sub(
-            rf'\b{keyword}\d*\b',
-            ' ',
-            working,
-            flags=re.IGNORECASE
-        )
-
-    # REMOVE GARBAGE WORDS
-
-    garbage_words = [
-
-        "queue",
-        "dispatch",
-        "handover",
-        "monitoring",
-        "vonage",
-        "munich",
-        "monich",
-        "rtp",
-        "emea",
-        "apac",
-        "tac",
-        "notice",
-        "medium",
-        "high",
-        "low",
-        "urgent",
-        "case",
-        "in",
-        "to",
-        "from",
-        "reminder"
-    ]
-
-    for word in garbage_words:
-
-        working = re.sub(
-            rf'\b{word}\b',
-            ' ',
-            working,
-            flags=re.IGNORECASE
-        )
-
-    # REMOVE ALL KNOWN CUSTOMERS
-
-    for company in vertical_map.keys():
-
-        working = re.sub(
-            re.escape(company),
-            ' ',
-            working,
-            flags=re.IGNORECASE
-        )
-
-    separators = [
-        "||",
-        "|",
-        ":",
-        "-"
-    ]
-
-    for sep in separators:
-
-        working = working.replace(
-            sep,
-            " "
-        )
-
-    working = re.sub(
-        r'\s+',
-        ' ',
-        working
-    ).strip()
-
-    if not working:
-        return ""
-
-    words = working.split()
-
-    if len(words) <= 1:
-        return ""
-
-    return working
-
+    return ""
 
 
 # ==========================================
@@ -562,21 +511,9 @@ def extract_case_details(
         subject
     )
 
-    vertical = ""
-
-    # ======================================
-    # FIND MATCHING EXCEL COMPANY
-    # ======================================
-
-    for company in vertical_map.keys():
-
-        if company.lower() in customer.lower():
-
-            vertical = get_vertical(
-                company
-            )
-
-            break
+    vertical = extract_vertical(
+        customer
+    )
 
     priority = extract_priority(
         subject
@@ -609,8 +546,5 @@ def extract_case_details(
 
         "Case Delivery Type": delivery_type,
 
-        "Comments": extract_comments(
-            subject,
-            customer
-        )
+        "Comments": ""
     }
