@@ -1,6 +1,6 @@
 import re
 
-from vertical_lookup import (
+from scripts.vertical_lookup import (
     get_vertical,
     vertical_map
 )

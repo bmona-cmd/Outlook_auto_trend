@@ -1,4 +1,4 @@
-from read_mails import run_mail_reader
+from scripts.read_mails import run_mail_reader
 
 if __name__ == "__main__":
 

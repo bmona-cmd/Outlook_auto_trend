@@ -1,18 +1,18 @@
 from playwright.sync_api import sync_playwright
 
-from parser import (
+from scripts.parser import (
     extract_case_details,
     should_skip_mail
 )
 
-from excel_writer import append_to_excel
+from scripts.excel_writer import append_to_excel
 
-from tracker import (
+from scripts.tracker import (
     already_processed,
     mark_processed
 )
 
-from logger import logger
+from scripts.logger import logger
 
 from pathlib import Path
 
