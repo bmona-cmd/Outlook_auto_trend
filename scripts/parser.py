@@ -248,10 +248,15 @@ def extract_mail_type(subject, body=""):
         or "ho-mw" in lower_subject
         or "ho created" in lower_subject
         or "-ho" in lower_subject
+        or "| ho |" in lower_subject
+        or "|ho|" in lower_subject
     ):
         return "Handover"
 
-    if "dispatch" in lower_subject:
+    if (
+        "dispatch" in lower_subject
+        or "case created" in lower_subject
+    ):
         return "Dispatch"
 
     # Fallback: scan body for handover/dispatch signals.
@@ -277,6 +282,9 @@ def extract_mail_type(subject, body=""):
             "[handover]",
             "handover note",
             "ho note",
+            "warm handover",
+            "warm hand",
+            "i will call you for warm handover",
         ]
 
         for signal in handover_body_signals:
@@ -288,6 +296,10 @@ def extract_mail_type(subject, body=""):
             "please take appropriate action",
             "in queue: vonage queue",
             "dispatch notice",
+            "case created",
+            "has been created",
+            "priority of p2",
+            "priority of p1",
         ]
 
         for signal in dispatch_body_signals:
