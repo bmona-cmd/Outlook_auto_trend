@@ -6,18 +6,10 @@ from openpyxl import load_workbook
 
 from openpyxl.utils import get_column_letter
 
+from datetime import datetime
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-
-OUTPUT_FILE = (
-
-    BASE_DIR
-
-    / "output"
-
-    / "weekend_cases.xlsx"
-)
 
 
 COLUMNS = [
@@ -38,22 +30,56 @@ COLUMNS = [
 ]
 
 
-def create_excel_file():
+# ==========================================
+# DYNAMIC OUTPUT FILE — SAT / SUN
+# ==========================================
 
-    OUTPUT_FILE.parent.mkdir(exist_ok=True)
+def get_output_file():
+
+    # Returns a Path like:
+    #   output/saturday_cases.xlsx   (weekday == 5)
+    #   output/sunday_cases.xlsx     (weekday == 6)
+    # Falls back to weekend_cases.xlsx on weekdays
+    # (covers TEST_MODE runs during the week).
+
+    weekday = datetime.now().weekday()
+
+    if weekday == 5:
+        filename = "saturday_cases.xlsx"
+
+    elif weekday == 6:
+        filename = "sunday_cases.xlsx"
+
+    else:
+        filename = "weekend_cases.xlsx"
+
+    return BASE_DIR / "output" / filename
+
+
+# ==========================================
+# CREATE EMPTY FILE
+# ==========================================
+
+def create_excel_file(output_file):
+
+    output_file.parent.mkdir(exist_ok=True)
 
     df = pd.DataFrame(columns=COLUMNS)
 
     df.to_excel(
-        OUTPUT_FILE,
+        output_file,
         index=False,
         engine="openpyxl"
     )
 
 
-def adjust_column_width():
+# ==========================================
+# AUTO-FIT COLUMN WIDTHS
+# ==========================================
 
-    wb = load_workbook(OUTPUT_FILE)
+def adjust_column_width(output_file):
+
+    wb = load_workbook(output_file)
 
     ws = wb.active
 
@@ -86,27 +112,33 @@ def adjust_column_width():
             get_column_letter(column)
         ].width = adjusted_width
 
-    wb.save(OUTPUT_FILE)
+    wb.save(output_file)
 
+
+# ==========================================
+# APPEND ROW
+# ==========================================
 
 def append_to_excel(data):
 
-    if not OUTPUT_FILE.exists():
-        create_excel_file()
+    output_file = get_output_file()
+
+    if not output_file.exists():
+        create_excel_file(output_file)
 
     try:
 
         df = pd.read_excel(
-            OUTPUT_FILE,
+            output_file,
             engine="openpyxl"
         )
 
     except:
 
-        create_excel_file()
+        create_excel_file(output_file)
 
         df = pd.read_excel(
-            OUTPUT_FILE,
+            output_file,
             engine="openpyxl"
         )
 
@@ -133,9 +165,9 @@ def append_to_excel(data):
     df.loc[len(df)] = new_row
 
     df.to_excel(
-        OUTPUT_FILE,
+        output_file,
         index=False,
         engine="openpyxl"
     )
 
-    adjust_column_width()
+    adjust_column_width(output_file)

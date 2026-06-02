@@ -5,7 +5,6 @@ from scripts.vertical_lookup import (
     vertical_map
 )
 
-
 # ==========================================
 # TECHNOLOGY MAP
 # ==========================================
@@ -29,7 +28,6 @@ DEVICE_TECH_MAP = {
     "software": "Software"
 }
 
-
 # ==========================================
 # STOP WORDS
 # ==========================================
@@ -51,13 +49,6 @@ STOP_WORDS = [
     "dispatch",
     "handover",
     "latency",
-    "routing",
-    "switching",
-    "security",
-    "wireless",
-    "vpn",
-    "bgp",
-    "ospf",
     "link",
     "down",
     "unstable",
@@ -72,10 +63,14 @@ STOP_WORDS = [
     "reminder"
 ]
 
-
 # ==========================================
 # SKIP REPLY MAILS
 # ==========================================
+
+# These keywords indicate a casual reply with no
+# case content. However they must NOT skip a mail
+# that also contains a case number or P1/P2 priority
+# — that check is done inside should_skip_mail().
 
 SKIP_KEYWORDS = [
 
@@ -84,10 +79,8 @@ SKIP_KEYWORDS = [
     "thank you",
     "working on",
     "noted",
-    "re:",
     "fyi"
 ]
-
 
 # ==========================================
 # CLEAN SUBJECT
@@ -111,7 +104,6 @@ def clean_subject(subject):
 
     return subject.strip()
 
-
 # ==========================================
 # NORMALIZE SUBJECT
 # ==========================================
@@ -121,6 +113,8 @@ def normalize_subject(subject):
     subject = clean_subject(subject)
 
     subject = subject.lower()
+
+    subject = subject.replace(".", " ")
 
     subject = re.sub(
         r'[\|\:\,\-\/\[\]\(\)_]+',
@@ -136,7 +130,6 @@ def normalize_subject(subject):
 
     return subject.strip()
 
-
 # ==========================================
 # SKIP MAIL CHECK
 # ==========================================
@@ -145,15 +138,53 @@ def should_skip_mail(subject):
 
     lower_subject = clean_subject(
         subject
-    ).lower()
+    ).lower().strip()
+
+    # "Re:" only skips if the mail has NO case number
+    # AND NO P1/P2 priority in the subject.
+    # Rationale: Re: mails like
+    #   "Re: [HANDOVER] Case# 2026-... P1->P2 GOOGLE LLC"
+    #   "Re: P2 | 2026-... | QFX5120 | TIGO | ..."
+    # are legitimate handovers/cases forwarded to the
+    # inbox and must be processed.
+    # Only skip Re: mails that are plain acknowledgement
+    # replies with no case reference.
+
+    is_reply = bool(
+        re.match(r'^re\s*:', lower_subject)
+    )
+
+    has_case_number = bool(
+        re.search(
+            r'\b\d{4}-\d{3,5}-\d{4,}\b',
+            lower_subject
+        )
+    )
+
+    has_priority = bool(
+        re.search(
+            r'\bp[12]\b',
+            lower_subject
+        )
+    )
+
+    if is_reply and not has_case_number and not has_priority:
+        return True
+
+    # For other skip keywords, also protect mails that
+    # have a case number or P1/P2 — e.g. a subject like
+    # "Thanks | 2026-0430-697636 | P1 | ..." should still
+    # be processed. Only skip keyword-matched mails that
+    # have no case reference at all.
 
     for keyword in SKIP_KEYWORDS:
 
         if keyword in lower_subject:
-            return True
+
+            if not has_case_number and not has_priority:
+                return True
 
     return False
-
 
 # ==========================================
 # CASE NUMBER
@@ -182,7 +213,6 @@ def extract_case_number(subject):
 
     return ""
 
-
 # ==========================================
 # PRIORITY
 # ==========================================
@@ -200,12 +230,13 @@ def extract_priority(subject):
 
     return ""
 
-
 # ==========================================
 # MAIL TYPE
 # ==========================================
 
-def extract_mail_type(subject):
+def extract_mail_type(subject, body=""):
+
+    # Check subject first
 
     lower_subject = subject.lower()
 
@@ -213,20 +244,87 @@ def extract_mail_type(subject):
         "handover" in lower_subject
         or "[ho]" in lower_subject
         or "ho:" in lower_subject
+        or "[ho-mw]" in lower_subject
+        or "ho-mw" in lower_subject
+        or "ho created" in lower_subject
+        or "-ho" in lower_subject
+        or "| ho |" in lower_subject
+        or "|ho|" in lower_subject
     ):
-
         return "Handover"
 
-    if "dispatch" in lower_subject:
-
+    if (
+        "dispatch" in lower_subject
+        or "case created" in lower_subject
+    ):
         return "Dispatch"
 
-    return ""
+    # Fallback: scan body for handover/dispatch signals.
+    # Needed for Re: chains where the subject lost the
+    # [HO] / [HANDOVER] tag (e.g. "Re: P2 | 2026-...").
 
+    if body:
+
+        lower_body = body[:2000].lower()
+
+        handover_body_signals = [
+            "please accept the ho",
+            "please accept the handover",
+            "handover accepted",
+            "accepting the handover",
+            "accepting the ho",
+            "accept the ho",
+            "accept the case",
+            "continue monitoring",
+            "hi bnc cfts",
+            "hi cfts",
+            "bng cfts",
+            "[handover]",
+            "handover note",
+            "ho note",
+            "warm handover",
+            "warm hand",
+            "i will call you for warm handover",
+        ]
+
+        for signal in handover_body_signals:
+            if signal in lower_body:
+                return "Handover"
+
+        dispatch_body_signals = [
+            "dispatch notification",
+            "please take appropriate action",
+            "in queue: vonage queue",
+            "dispatch notice",
+            "case created",
+            "has been created",
+            "priority of p2",
+            "priority of p1",
+        ]
+
+        for signal in dispatch_body_signals:
+            if signal in lower_body:
+                return "Dispatch"
+
+    return ""
 
 # ==========================================
 # TECHNOLOGY EXTRACTION
 # ==========================================
+
+def _get_device_pattern(keyword):
+
+    # FIX BUG 2: "ex" alone as \bex\d*\b matches
+    # common words like "example", "existing",
+    # "expected" which breaks customer extraction.
+    # Require at least one digit after "ex" so only
+    # real device names like ex2300, ex4300 match.
+
+    if keyword == "ex":
+        return r'\bex\d+\b'
+
+    return rf'\b{re.escape(keyword)}\d*\b'
+
 
 def extract_technology(subject, body=""):
 
@@ -238,9 +336,7 @@ def extract_technology(subject, body=""):
 
     for keyword, tech in DEVICE_TECH_MAP.items():
 
-        pattern = (
-            rf'\b{re.escape(keyword)}\d*\b'
-        )
+        pattern = _get_device_pattern(keyword)
 
         if re.search(
             pattern,
@@ -250,7 +346,6 @@ def extract_technology(subject, body=""):
             return tech
 
     return ""
-
 
 # ==========================================
 # REMOVE KNOWN METADATA
@@ -276,7 +371,7 @@ def remove_known_patterns(text):
         text
     )
 
-    # REMOVE DELIVERY WORDS
+    # REMOVE MAIL TYPE WORDS
 
     text = re.sub(
         r'\bdispatch\b',
@@ -297,14 +392,19 @@ def remove_known_patterns(text):
     )
 
     # REMOVE DEVICE NAMES
+    # FIX BUG 2: use same stricter pattern for "ex"
+    # here so customer names containing "ex" aren't
+    # mangled (e.g. "Apex", "Vertex", "Vexcel").
 
     for keyword in DEVICE_TECH_MAP.keys():
 
         text = re.sub(
-            rf'\b{keyword}\d*\b',
+            _get_device_pattern(keyword),
             ' ',
             text
         )
+
+    # REMOVE EXTRA SPACES
 
     text = re.sub(
         r'\s+',
@@ -314,150 +414,72 @@ def remove_known_patterns(text):
 
     return text.strip()
 
-
 # ==========================================
 # CUSTOMER EXTRACTION
 # ==========================================
 
-def extract_customer(subject):
+def extract_customer(text):
 
-    if not subject:
+    if not text:
         return ""
 
     cleaned = remove_known_patterns(
-        subject
+        text
     )
 
-    tokens = cleaned.split()
+    cleaned = cleaned.lower()
 
-    best_customer = ""
-    best_match_length = 0
+    best_match = ""
+    best_score = 0
 
     for excel_customer in vertical_map.keys():
 
-        excel_customer_clean = (
+        customer_clean = (
             excel_customer
             .lower()
             .strip()
         )
 
         customer_words = (
-            excel_customer_clean.split()
+            customer_clean.split()
+        )
+
+        matched_words = 0
+
+        for word in customer_words:
+
+            if word in cleaned:
+
+                matched_words += 1
+
+        if not customer_words:
+            continue
+
+        score = (
+            matched_words
+            /
+            len(customer_words)
         )
 
         # ==================================
-        # DIRECT CONTAINMENT
+        # BEST MATCH
         # ==================================
 
-        if excel_customer_clean in cleaned:
+        if score > best_score:
 
-            start_index = cleaned.find(
-                excel_customer_clean
-            )
+            best_score = score
 
-            remaining = cleaned[
-                start_index:
-            ]
+            best_match = excel_customer
 
-            extracted_words = []
+    # ======================================
+    # MINIMUM CONFIDENCE
+    # ======================================
 
-            for word in remaining.split():
+    if best_score >= 0.6:
 
-                if word.lower() in STOP_WORDS:
-                    break
+        return best_match.title()
 
-                extracted_words.append(word)
-
-            extracted_customer = (
-                " ".join(extracted_words)
-            ).strip()
-
-            if (
-                len(extracted_customer)
-                >
-                best_match_length
-            ):
-
-                best_customer = (
-                    extracted_customer
-                )
-
-                best_match_length = (
-                    len(extracted_customer)
-                )
-
-        # ==================================
-        # TOKEN OVERLAP
-        # ==================================
-
-        else:
-
-            common_words = (
-
-                set(tokens)
-                &
-                set(customer_words)
-            )
-
-            overlap_ratio = 0
-
-            if customer_words:
-
-                overlap_ratio = (
-
-                    len(common_words)
-                    /
-                    len(customer_words)
-                )
-
-            if overlap_ratio >= 0.6:
-
-                extracted_words = []
-
-                started = False
-
-                for token in tokens:
-
-                    if (
-                        token in common_words
-                        or started
-                    ):
-
-                        started = True
-
-                        if token.lower() in STOP_WORDS:
-                            break
-
-                        extracted_words.append(
-                            token
-                        )
-
-                extracted_customer = (
-                    " ".join(extracted_words)
-                ).strip()
-
-                if (
-                    len(extracted_customer)
-                    >
-                    best_match_length
-                ):
-
-                    best_customer = (
-                        extracted_customer
-                    )
-
-                    best_match_length = (
-                        len(extracted_customer)
-                    )
-
-    best_customer = re.sub(
-        r'\s+',
-        ' ',
-        best_customer
-    ).strip()
-
-    return best_customer.title()
-
+    return ""
 
 # ==========================================
 # VERTICAL EXTRACTION
@@ -481,16 +503,6 @@ def extract_vertical(customer):
 
     return ""
 
-
-# ==========================================
-# COMMENTS
-# ==========================================
-
-def extract_comments():
-
-    return ""
-
-
 # ==========================================
 # MAIN EXTRACTION
 # ==========================================
@@ -507,25 +519,74 @@ def extract_case_details(
         subject
     )
 
+    # ======================================
+    # CUSTOMER EXTRACTION
+    # ======================================
+
     customer = extract_customer(
         subject
     )
+
+    # FALLBACK TO BODY
+
+    if not customer and body:
+
+        customer = extract_customer(
+            body
+        )
+
+    # ======================================
+    # VERTICAL
+    # ======================================
 
     vertical = extract_vertical(
         customer
     )
 
+    # ======================================
+    # PRIORITY
+    # ======================================
+
     priority = extract_priority(
         subject
     )
 
+    # ======================================
+    # MAIL TYPE
+    # ======================================
+
     mail_type = extract_mail_type(
-        subject
+        subject,
+        body
     )
 
-    delivery_type = (
-        f"{mail_type} {priority}"
-    ).strip()
+    # ======================================
+    # SKIP P3/P4
+    # ======================================
+
+    if priority in ["P3", "P4"]:
+
+        return None
+
+    # ======================================
+    # DELIVERY TYPE
+    # ======================================
+
+    delivery_type = ""
+
+    if mail_type == "Dispatch":
+
+        delivery_type = (
+            f"Dispatch {priority}"
+        ).strip()
+
+    elif mail_type == "Handover":
+
+        delivery_type = "Handover"
+
+    # ======================================
+    # RETURN FINAL DATA
+    # ======================================
 
     return {
 
