@@ -442,26 +442,46 @@ def run_one_scan(page):
 
 def run_mail_reader():
 
+    global RUNNING
+
+    if not RUNNING:
+        RUNNING = True
+
+    if not AUTH_FILE.exists():
+
+        print(
+            f"Auth file not found: {AUTH_FILE}"
+        )
+
+        return
+
     with sync_playwright() as p:
 
-        CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-               
-    
+        CHROME_PATH = (
+            "/Applications/Google Chrome.app/"
+            "Contents/MacOS/Google Chrome"
+        )
+
         browser = p.chromium.launch(
-        executable_path=CHROME_PATH,
-        headless=False
-    )
-        
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(storage_state=str(AUTH_FILE))
-        page    = context.new_page()
+            executable_path=CHROME_PATH,
+            headless=False
+        )
+
+        context = browser.new_context(
+            storage_state=str(AUTH_FILE)
+        )
+
+        page = context.new_page()
 
         print("\nOpening Outlook...")
+
         page.goto(
             "https://outlook.office.com/mail",
             wait_until="domcontentloaded"
         )
+
         page.wait_for_timeout(10000)
+
         print("Outlook loaded ✓")
 
         while RUNNING:
@@ -469,59 +489,96 @@ def run_mail_reader():
             try:
 
                 if not within_window():
+
                     n = ist_now()
+
                     print(
                         f"Outside window "
-                        f"[{n.strftime('%a %H:%M')} IST] — sleeping 60s"
+                        f"[{n.strftime('%a %H:%M')} IST] "
+                        f"— sleeping 60s"
                     )
+
                     time.sleep(60)
+
                     continue
 
-                n   = ist_now()
+                n = ist_now()
+
                 day = (
-                    "Saturday" if n.weekday() == 5
-                    else "Sunday" if n.weekday() == 6
+                    "Saturday"
+                    if n.weekday() == 5
+                    else "Sunday"
+                    if n.weekday() == 6
                     else "TEST"
                 )
 
                 print(
                     f"\n{'='*55}\n"
-                    f"SCAN START [{n.strftime('%H:%M')} IST — {day}]\n"
+                    f"SCAN START "
+                    f"[{n.strftime('%H:%M')} IST — {day}]\n"
                     f"{'='*55}"
                 )
 
-                # Fresh reload so new mails are visible
                 print("Reloading Outlook...")
+
                 page.reload()
+
                 page.wait_for_timeout(8000)
 
-                # Scroll to top of inbox before scanning
                 try:
-                    panel = page.locator("div[role='list']").first
-                    panel.evaluate("el => el.scrollTo(0, 0)")
+
+                    panel = page.locator(
+                        "div[role='list']"
+                    ).first
+
+                    panel.evaluate(
+                        "el => el.scrollTo(0, 0)"
+                    )
+
                     page.wait_for_timeout(1000)
+
                 except:
                     pass
 
-                # Run full scan
                 run_one_scan(page)
 
-                # Sleep 5 minutes
-                n    = ist_now()
-                wake = n + timedelta(seconds=SLEEP_SECS)
-                print(
-                    f"\nSleeping {SLEEP_SECS // 60} min "
-                    f"[now {n.strftime('%H:%M')} — "
-                    f"next ~{wake.strftime('%H:%M')} IST]"
+                n = ist_now()
+
+                wake = (
+                    n +
+                    timedelta(
+                        seconds=SLEEP_SECS
+                    )
                 )
-                time.sleep(SLEEP_SECS)
+
+                print(
+                    f"\nSleeping "
+                    f"{SLEEP_SECS // 60} min "
+                    f"[now {n.strftime('%H:%M')} "
+                    f"— next ~{wake.strftime('%H:%M')} IST]"
+                )
+
+                time.sleep(
+                    SLEEP_SECS
+                )
 
             except Exception as e:
+
                 logger.error(str(e))
-                print(f"\nMain loop error: {e}")
+
+                print(
+                    f"\nMain loop error: {e}"
+                )
+
                 try:
+
                     page.reload()
+
                     page.wait_for_timeout(10000)
+
                 except:
                     pass
+
                 time.sleep(30)
+
+        browser.close()
