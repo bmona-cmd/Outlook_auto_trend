@@ -452,13 +452,14 @@ def run_mail_reader():
         headless=False
     )
         
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(storage_state=str(AUTH_FILE))
         page    = context.new_page()
 
         print("\nOpening Outlook...")
         page.goto(
-            "https://outlook.office.com/mail"
-            
+            "https://outlook.office.com/mail",
+            wait_until="domcontentloaded"
         )
         page.wait_for_timeout(10000)
         print("Outlook loaded ✓")
