@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Weekend Mail Automation</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #1a1d23;
+    --panel:   #22262f;
+    --card:    #2a2f3a;
+    --border:  #333845;
+    --accent:  #4f8ef7;
+    --acc2:    #3a6fd8;
+    --success: #3ecf8e;
+    --danger:  #f76f6f;
+    --warn:    #f7c04f;
+    --text:    #e2e8f0;
+    --muted:   #6b7280;
+    --font:    -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono:    "Menlo", "Monaco", "Courier New", monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── HEADER ── */
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    height: 56px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--muted);
+  }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--muted);
+    transition: background .3s;
+  }
+  .status-dot.running  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  #status-text.running { color: var(--success); }
+
+  /* ── TAB BAR ── */
+  nav {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 0;
+    flex-shrink: 0;
+  }
+  nav button {
+    background: none; border: none; cursor: pointer;
+    color: var(--muted); font-family: var(--font);
+    font-size: 14px; padding: 12px 24px;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+  }
+  nav button:hover { color: var(--text); }
+  nav button.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+    background: var(--bg);
+  }
+
+  /* ── MAIN ── */
+  main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .page { display: none; flex: 1; flex-direction: column; overflow: hidden; padding: 24px 28px; }
+  .page.active { display: flex; }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: none; border-radius: 7px; cursor: pointer;
+    font-family: var(--font); font-size: 14px; font-weight: 600;
+    padding: 9px 20px; transition: opacity .15s, transform .1s;
+    white-space: nowrap;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+  .btn-blue   { background: var(--accent);  color: #fff; }
+  .btn-blue:hover:not(:disabled) { background: var(--acc2); }
+  .btn-red    { background: var(--danger);  color: #fff; }
+  .btn-red:hover:not(:disabled)  { background: #d95f5f; }
+  .btn-ghost  { background: var(--card);    color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--border); }
+  .btn-green  { background: #1a9e6e; color: #fff; }
+  .btn-green:hover { background: #158058; }
+
+  /* ── CTRL ROW ── */
+  .ctrl-row {
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; margin-bottom: 18px;
+  }
+  .ctrl-sep { width: 1px; height: 32px; background: var(--border); margin: 0 6px; }
+
+  /* ── INFO CARD ── */
+  .info-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;
+  }
+  .info-card .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
+  .info-card .value { font-size: 15px; font-weight: 600; }
+
+  /* ── LOG BOX ── */
+  .log-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  #log-box {
+    flex: 1;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.75;
+    overflow-y: auto; min-height: 200px;
+    color: var(--text);
+  }
+  #log-box .log-line      { color: var(--muted); }
+  #log-box .log-line.ok   { color: var(--success); }
+  #log-box .log-line.err  { color: var(--danger); }
+  #log-box .log-line.warn { color: var(--warn); }
+
+  /* ── FORM CARD ── */
+  .form-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px 20px; margin-bottom: 20px;
+  }
+  .form-card h2 { font-size: 14px; font-weight: 700; margin-bottom: 14px; }
+  .form-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .form-group input,
+  .form-group select {
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px;
+    padding: 8px 12px; font-family: var(--font); font-size: 14px;
+    outline: none; transition: border-color .15s;
+    min-width: 180px;
+  }
+  .form-group input:focus,
+  .form-group select:focus { border-color: var(--accent); }
+  .form-group select option { background: var(--panel); }
+  .form-hint { font-size: 11px; color: var(--muted); margin-top: 10px; }
+
+  /* ── TABLE ── */
+  .table-wrap {
+    flex: 1; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    background: var(--panel); color: var(--muted);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
+    padding: 10px 16px; text-align: left; position: sticky; top: 0;
+  }
+  tbody tr { border-top: 1px solid var(--border); transition: background .1s; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody td { padding: 10px 16px; font-size: 13px; color: var(--text); }
+  tbody td.muted { color: var(--muted); }
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    padding: 2px 9px; border-radius: 99px;
+    text-transform: uppercase; letter-spacing: .4px;
+  }
+  .badge-builtin { background: rgba(107,114,128,.15); color: var(--muted); }
+  .badge-custom  { background: rgba(62,207,142,.12);  color: var(--success); border: 1px solid rgba(62,207,142,.3); }
+
+  /* ── TOAST ── */
+  #toast {
+    position: fixed; bottom: 28px; right: 28px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 20px;
+    font-size: 13px; font-weight: 500;
+    opacity: 0; pointer-events: none;
+    transition: opacity .25s; z-index: 999;
+  }
+  #toast.show { opacity: 1; }
+  #toast.ok  { border-color: var(--success); color: var(--success); }
+  #toast.err { border-color: var(--danger);  color: var(--danger);  }
+
+  /* ── FOOTER ── */
+  footer {
+    background: var(--panel); border-top: 1px solid var(--border);
+    padding: 8px 28px; font-size: 11px; color: var(--muted);
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <h1>Weekend Mail Automation</h1>
+  <div class="status-pill">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Stopped</span>
+  </div>
+</header>
+
+<!-- TAB BAR -->
+<nav>
+  <button class="active" onclick="showTab('dashboard',this)">Dashboard</button>
+  <button onclick="showTab('customers',this)">Customers</button>
+  <button onclick="showTab('devices',this)">Devices</button>
+</nav>
+
+<main>
+
+  <!-- ════════════════════════════════
+       PAGE: DASHBOARD
+  ════════════════════════════════ -->
+  <section class="page active" id="tab-dashboard">
+
+    <div class="ctrl-row">
+      <button class="btn btn-blue"  id="btn-start" onclick="startAuto()">▶ &nbsp;Start</button>
+      <button class="btn btn-red"   id="btn-stop"  onclick="stopAuto()" disabled>■ &nbsp;Stop</button>
+      <div class="ctrl-sep"></div>
+      <button class="btn btn-ghost" onclick="openExcel()">📂 &nbsp;Open Excel</button>
+      <a class="btn btn-ghost" href="/api/download_excel" download>⬇ &nbsp;Download Excel</a>
+    </div>
+
+    <div class="info-card">
+      <div class="label">Latest output file</div>
+      <div class="value" id="latest-file">{{ latest_file }}</div>
+    </div>
+
+    <div class="log-label">Activity Log</div>
+    <div id="log-box"></div>
+
+  </section>
+
+  <!-- ════════════════════════════════
+       PAGE: CUSTOMERS
+  ════════════════════════════════ -->
+  <section class="page" id="tab-customers">
+
+    <div class="form-card">
+      <h2>Add New Customer</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Customer Name</label>
+          <input type="text" id="cust-name" placeholder="e.g. Google LLC" />
+        </div>
+        <div class="form-group">
+          <label>Vertical</label>
+          <input type="text" id="cust-vert" placeholder="e.g. Hyperscaler" />
+        </div>
+        <button class="btn btn-green" onclick="addCustomer()">+ Add</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Customer / Company</th><th>Vertical</th></tr>
+        </thead>
+        <tbody id="cust-tbody">
+          <tr><td colspan="2" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </section>
+
+  <!-- ════════════════════════════════
+       PAGE: DEVICES
+  ════════════════════════════════ -->
+  <section class="page" id="tab-devices">
+
+    <div class="form-card">
+      <h2>Add New Device Keyword</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Device Keyword</label>
+          <input type="text" id="dev-kw" placeholder="e.g. nfx, crpd" />
+        </div>
+        <div class="form-group">
+          <label>Technology</label>
+          <select id="dev-tech">
+            <option value="">Select…</option>
+            <option>Routing</option>
+            <option>Security</option>
+            <option>Switching</option>
+            <option>Wireless</option>
+            <option>SDWAN</option>
+            <option>Software</option>
+          </select>
+        </div>
+        <button class="btn btn-green" onclick="addDevice()">+ Add</button>
+      </div>
+      <p class="form-hint">Custom devices are saved to <code>data/custom_devices.json</code> and applied immediately to the running parser.</p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Device Keyword</th><th>Technology</th><th>Source</th></tr>
+        </thead>
+        <tbody id="dev-tbody">
+          <tr><td colspan="3" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </section>
+
+</main>
+
+<!-- FOOTER -->
+<footer>Outlook Weekend Monitoring Tool &nbsp;•&nbsp; Juniper BNC CFTS</footer>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ── TAB SWITCHING ──────────────────────────────────────────────────────────
+function showTab(id, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'customers') loadCustomers();
+  if (id === 'devices')   loadDevices();
+}
+
+// ── TOAST ──────────────────────────────────────────────────────────────────
+function toast(msg, type='ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show ' + type;
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.className = '', 2800);
+}
+
+// ── STATUS POLL ────────────────────────────────────────────────────────────
+let lastLogCount = 0;
+
+async function pollStatus() {
+  try {
+    const r   = await fetch('/api/status');
+    const d   = await r.json();
+
+    // dots
+    const dot  = document.getElementById('status-dot');
+    const stat = document.getElementById('status-text');
+    if (d.running) {
+      dot.className  = 'status-dot running';
+      stat.textContent = 'Running';
+      stat.className = 'running';
+    } else {
+      dot.className  = 'status-dot';
+      stat.textContent = 'Stopped';
+      stat.className = '';
+    }
+
+    // buttons
+    document.getElementById('btn-start').disabled = d.running;
+    document.getElementById('btn-stop').disabled  = !d.running;
+
+    // file name
+    document.getElementById('latest-file').textContent = d.latest_file;
+
+    // log
+    if (d.logs.length !== lastLogCount) {
+      lastLogCount = d.logs.length;
+      const box = document.getElementById('log-box');
+      box.innerHTML = '';
+      d.logs.forEach(line => {
+        const div = document.createElement('div');
+        div.className = 'log-line';
+        const lo = line.toLowerCase();
+        if (lo.includes('saved') || lo.includes('started') || lo.includes('added') || lo.includes('ready'))
+          div.classList.add('ok');
+        else if (lo.includes('error') || lo.includes('failed'))
+          div.classList.add('err');
+        else if (lo.includes('skip') || lo.includes('outside'))
+          div.classList.add('warn');
+        div.textContent = line;
+        box.appendChild(div);
+      });
+      box.scrollTop = box.scrollHeight;
+    }
+  } catch(e) {}
+}
+
+setInterval(pollStatus, 2000);
+pollStatus();
+
+// ── AUTOMATION ────────────────────────────────────────────────────────────
+async function startAuto() {
+  const r = await fetch('/api/start', {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) toast(d.msg, 'err');
+}
+
+async function stopAuto() {
+  await fetch('/api/stop', {method:'POST'});
+}
+
+function openExcel() {
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    if (d.latest_file === '—') { toast('No Excel file found yet.','err'); return; }
+    toast('Use Download Excel to save the file, then open it locally.','ok');
+  });
+}
+
+// ── CUSTOMERS ─────────────────────────────────────────────────────────────
+async function loadCustomers() {
+  const r    = await fetch('/api/customers');
+  const data = await r.json();
+  const tb   = document.getElementById('cust-tbody');
+  if (!data.length) {
+    tb.innerHTML = '<tr><td colspan="2" class="muted" style="text-align:center;padding:24px">No customers found in mapping file.</td></tr>';
+    return;
+  }
+  tb.innerHTML = data.map(c =>
+    `<tr><td>${esc(c.customer)}</td><td class="muted">${esc(c.vertical)}</td></tr>`
+  ).join('');
+}
+
+async function addCustomer() {
+  const name = document.getElementById('cust-name').value.trim();
+  const vert = document.getElementById('cust-vert').value.trim();
+  if (!name || !vert) { toast('Fill in both fields.','err'); return; }
+  const r = await fetch('/api/customers', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({customer: name, vertical: vert})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast(`'${name}' added!`, 'ok');
+    document.getElementById('cust-name').value = '';
+    document.getElementById('cust-vert').value = '';
+    loadCustomers();
+  } else {
+    toast(d.msg || 'Failed to add.', 'err');
+  }
+}
+
+// ── DEVICES ───────────────────────────────────────────────────────────────
+async function loadDevices() {
+  const r    = await fetch('/api/devices');
+  const data = await r.json();
+  const tb   = document.getElementById('dev-tbody');
+  tb.innerHTML = data.map(d =>
+    `<tr>
+      <td>${esc(d.keyword)}</td>
+      <td class="muted">${esc(d.technology)}</td>
+      <td><span class="badge badge-${d.source === 'custom' ? 'custom' : 'builtin'}">${esc(d.source)}</span></td>
+    </tr>`
+  ).join('');
+}
+
+async function addDevice() {
+  const kw   = document.getElementById('dev-kw').value.trim();
+  const tech = document.getElementById('dev-tech').value;
+  if (!kw || !tech) { toast('Fill in both fields.','err'); return; }
+  const r = await fetch('/api/devices', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({keyword: kw, technology: tech})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast(`Device '${kw}' added!`, 'ok');
+    document.getElementById('dev-kw').value = '';
+    document.getElementById('dev-tech').value = '';
+    loadDevices();
+  } else {
+    toast(d.msg || 'Failed to add.', 'err');
+  }
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
