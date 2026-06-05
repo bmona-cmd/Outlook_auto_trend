@@ -10,14 +10,17 @@ from pathlib import Path
 import threading
 import json
 import builtins
+import re
 
 # ── project imports (unchanged) ──────────────────────────────────────────────
 import scripts.read_mails as mail_reader
+import scripts.email_report as email_report
 
 BASE_DIR     = Path(__file__).resolve().parent
 MAPPING_FILE = BASE_DIR / "customer_vertical_mapping.xlsx"
 DEVICE_FILE  = BASE_DIR / "data" / "custom_devices.json"
 OUTPUT_DIR   = BASE_DIR / "output"
+EMAIL_RE     = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 app = Flask(__name__)
 
@@ -35,6 +38,7 @@ def push_log(msg: str):
         log_buffer.append(line)
 
 automation_thread = None
+email_thread = None
 
 # ── patch read_mails to also push to log_buffer ───────────────────────────────
 _orig_print = builtins.print
@@ -45,6 +49,7 @@ def _log_print(*args, **kwargs):
     _orig_print(*args, **kwargs)
 
 mail_reader.print = _log_print   # redirect mail-reader prints to our log too
+email_report.print = _log_print   # redirect email sender prints to our log too
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -106,6 +111,57 @@ def latest_excel():
     files = list(OUTPUT_DIR.glob("*.xlsx"))
     return max(files, key=lambda f: f.stat().st_mtime) if files else None
 
+def email_status() -> dict:
+    try:
+        recipients = load_email_recipients()
+        return {
+            "configured": bool(recipients),
+            "recipients": recipients,
+            "message": (
+                f"{len(recipients)} recipient(s) configured"
+                if recipients else
+                "No recipients configured"
+            )
+        }
+    except FileNotFoundError:
+        return {
+            "configured": False,
+            "recipients": [],
+            "message": "email_config.json not found"
+        }
+    except Exception as e:
+        return {
+            "configured": False,
+            "recipients": [],
+            "message": f"Email config error: {e}"
+        }
+
+def load_email_config() -> dict:
+    if not email_report.CONFIG_FILE.exists():
+        return {"sender_email": "", "recipients": []}
+    try:
+        data = json.loads(email_report.CONFIG_FILE.read_text())
+    except Exception:
+        data = {}
+    data.setdefault("sender_email", "")
+    data.setdefault("recipients", [])
+    return data
+
+def save_email_config(data: dict):
+    email_report.CONFIG_FILE.write_text(json.dumps(data, indent=4))
+
+def load_email_recipients() -> list:
+    config = load_email_config()
+    seen = set()
+    recipients = []
+    for email in config.get("recipients", []):
+        email = str(email).strip()
+        key = email.lower()
+        if email and key not in seen:
+            recipients.append(email)
+            seen.add(key)
+    return recipients
+
 BUILTIN_DEVICES = {
     "mx":"Routing","ptx":"Routing","acx":"Routing",
     "srx":"Security","ssg":"Security",
@@ -150,6 +206,7 @@ def api_stop():
 
 @app.route("/api/status")
 def api_status():
+    email_alive = bool(email_thread and email_thread.is_alive())
     alive = bool(automation_thread and automation_thread.is_alive())
     # sync RUNNING flag if thread died naturally
     if not alive and mail_reader.RUNNING:
@@ -160,8 +217,83 @@ def api_status():
     return jsonify({
         "running": mail_reader.RUNNING,
         "logs":    logs,
-        "latest_file": xl.name if xl else "—"
+        "latest_file": xl.name if xl else "—",
+        "email": email_status(),
+        "email_sending": email_alive
     })
+
+@app.route("/api/send_report", methods=["POST"])
+def api_send_report():
+    global email_thread
+
+    if email_thread and email_thread.is_alive():
+        return jsonify({"ok": False, "msg": "Email send already in progress"}), 409
+
+    status = email_status()
+    if not status["configured"]:
+        push_log(status["message"])
+        return jsonify({"ok": False, "msg": status["message"]}), 400
+
+    def _send():
+        push_log("Manual report email requested from dashboard.")
+        ok = email_report.send_report()
+        if ok:
+            push_log("Manual report email completed.")
+        else:
+            push_log("Manual report email failed.")
+
+    email_thread = threading.Thread(target=_send, daemon=True)
+    email_thread.start()
+    return jsonify({"ok": True, "msg": "Email send started"})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ROUTES — EMAIL RECIPIENTS API
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/email_recipients")
+def api_email_recipients():
+    return jsonify(load_email_recipients())
+
+@app.route("/api/email_recipients", methods=["POST"])
+def api_add_email_recipient():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+
+    if not email:
+        return jsonify({"ok": False, "msg": "Email address is required"}), 400
+
+    if not EMAIL_RE.match(email):
+        return jsonify({"ok": False, "msg": "Enter a valid email address"}), 400
+
+    config = load_email_config()
+    recipients = load_email_recipients()
+
+    if email.lower() in {r.lower() for r in recipients}:
+        return jsonify({"ok": False, "msg": "Recipient already exists"}), 400
+
+    recipients.append(email)
+    config["recipients"] = recipients
+    save_email_config(config)
+    push_log(f"Email recipient added: {email}")
+    return jsonify({"ok": True})
+
+@app.route("/api/email_recipients/remove", methods=["POST"])
+def api_remove_email_recipient():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+
+    recipients = load_email_recipients()
+    kept = [r for r in recipients if r.lower() != email.lower()]
+
+    if len(kept) == len(recipients):
+        return jsonify({"ok": False, "msg": "Recipient not found"}), 404
+
+    config = load_email_config()
+    config["recipients"] = kept
+    save_email_config(config)
+    push_log(f"Email recipient removed: {email}")
+    return jsonify({"ok": True})
 
 
 # ═════════════════════════════════════════════════════════════════════════════

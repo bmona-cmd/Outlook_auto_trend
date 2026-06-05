@@ -8,17 +8,19 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg:      #1a1d23;
-    --panel:   #22262f;
-    --card:    #2a2f3a;
-    --border:  #333845;
-    --accent:  #4f8ef7;
-    --acc2:    #3a6fd8;
-    --success: #3ecf8e;
-    --danger:  #f76f6f;
-    --warn:    #f7c04f;
-    --text:    #e2e8f0;
-    --muted:   #6b7280;
+    --bg:      #f5f7f6;
+    --panel:   #ffffff;
+    --card:    #ffffff;
+    --border:  #d9e1dd;
+    --accent:  #01a982;
+    --acc2:    #008566;
+    --success: #01a982;
+    --danger:  #c0392b;
+    --warn:    #c98500;
+    --text:    #111111;
+    --muted:   #5c6763;
+    --black:   #000000;
+    --soft:    #e9f7f3;
     --font:    -apple-system, "Helvetica Neue", Arial, sans-serif;
     --mono:    "Menlo", "Monaco", "Courier New", monospace;
   }
@@ -35,8 +37,8 @@
 
   /* ── HEADER ── */
   header {
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
+    background: var(--black);
+    border-bottom: 4px solid var(--accent);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -44,10 +46,10 @@
     height: 56px;
     flex-shrink: 0;
   }
-  header h1 { font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+  header h1 { color: #ffffff; font-size: 17px; font-weight: 700; letter-spacing: 0; }
   .status-pill {
     display: flex; align-items: center; gap: 8px;
-    font-size: 13px; color: var(--muted);
+    font-size: 13px; color: #cfd8d4;
   }
   .status-dot {
     width: 10px; height: 10px; border-radius: 50%;
@@ -74,9 +76,9 @@
   }
   nav button:hover { color: var(--text); }
   nav button.active {
-    color: var(--text);
+    color: var(--black);
     border-bottom-color: var(--accent);
-    background: var(--bg);
+    background: var(--soft);
   }
 
   /* ── MAIN ── */
@@ -98,11 +100,11 @@
   .btn-blue   { background: var(--accent);  color: #fff; }
   .btn-blue:hover:not(:disabled) { background: var(--acc2); }
   .btn-red    { background: var(--danger);  color: #fff; }
-  .btn-red:hover:not(:disabled)  { background: #d95f5f; }
-  .btn-ghost  { background: var(--card);    color: var(--text); border: 1px solid var(--border); }
-  .btn-ghost:hover { background: var(--border); }
-  .btn-green  { background: #1a9e6e; color: #fff; }
-  .btn-green:hover { background: #158058; }
+  .btn-red:hover:not(:disabled)  { background: #9f2f24; }
+  .btn-ghost  { background: #ffffff; color: var(--black); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--soft); border-color: var(--accent); }
+  .btn-green  { background: var(--accent); color: #fff; }
+  .btn-green:hover { background: var(--acc2); }
 
   /* ── CTRL ROW ── */
   .ctrl-row {
@@ -115,21 +117,28 @@
   .info-card {
     background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
   }
-  .info-card .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
+  .info-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px; margin-bottom: 18px;
+  }
+  .info-grid .info-card { margin-bottom: 0; }
+  .info-card .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0; }
   .info-card .value { font-size: 15px; font-weight: 600; }
+  .info-card .subvalue { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
 
   /* ── LOG BOX ── */
-  .log-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .log-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0; margin-bottom: 8px; }
   #log-box {
     flex: 1;
-    background: var(--card); border: 1px solid var(--border);
+    background: #0c0f0e; border: 1px solid #202826;
     border-radius: 8px; padding: 14px 16px;
     font-family: var(--mono); font-size: 12px; line-height: 1.75;
     overflow-y: auto; min-height: 200px;
-    color: var(--text);
+    color: #edf5f2;
   }
-  #log-box .log-line      { color: var(--muted); }
+  #log-box .log-line      { color: #b9c6c1; }
   #log-box .log-line.ok   { color: var(--success); }
   #log-box .log-line.err  { color: var(--danger); }
   #log-box .log-line.warn { color: var(--warn); }
@@ -138,51 +147,58 @@
   .form-card {
     background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; padding: 18px 20px; margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
   }
   .form-card h2 { font-size: 14px; font-weight: 700; margin-bottom: 14px; }
   .form-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
   .form-group { display: flex; flex-direction: column; gap: 5px; }
-  .form-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .form-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0; }
   .form-group input,
   .form-group select {
-    background: var(--panel); border: 1px solid var(--border);
+    background: #ffffff; border: 1px solid var(--border);
     color: var(--text); border-radius: 6px;
     padding: 8px 12px; font-family: var(--font); font-size: 14px;
     outline: none; transition: border-color .15s;
     min-width: 180px;
   }
   .form-group input:focus,
-  .form-group select:focus { border-color: var(--accent); }
+  .form-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(1,169,130,.14); }
   .form-group select option { background: var(--panel); }
   .form-hint { font-size: 11px; color: var(--muted); margin-top: 10px; }
 
   /* ── TABLE ── */
   .table-wrap {
     flex: 1; overflow-y: auto;
+    background: #ffffff;
     border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
   }
   table { width: 100%; border-collapse: collapse; }
   thead th {
-    background: var(--panel); color: var(--muted);
-    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
+    background: var(--soft); color: var(--black);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0;
     padding: 10px 16px; text-align: left; position: sticky; top: 0;
   }
   tbody tr { border-top: 1px solid var(--border); transition: background .1s; }
-  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody tr:hover { background: #f1fbf8; }
   tbody td { padding: 10px 16px; font-size: 13px; color: var(--text); }
   tbody td.muted { color: var(--muted); }
   .badge {
     display: inline-block; font-size: 10px; font-weight: 600;
     padding: 2px 9px; border-radius: 99px;
-    text-transform: uppercase; letter-spacing: .4px;
+    text-transform: uppercase; letter-spacing: 0;
   }
-  .badge-builtin { background: rgba(107,114,128,.15); color: var(--muted); }
-  .badge-custom  { background: rgba(62,207,142,.12);  color: var(--success); border: 1px solid rgba(62,207,142,.3); }
+  .badge-builtin { background: #eef1f0; color: var(--muted); }
+  .badge-custom  { background: var(--soft); color: var(--acc2); border: 1px solid rgba(1,169,130,.35); }
+  .table-action {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
 
   /* ── TOAST ── */
   #toast {
     position: fixed; bottom: 28px; right: 28px;
-    background: var(--card); border: 1px solid var(--border);
+    background: #ffffff; border: 1px solid var(--border);
     border-radius: 8px; padding: 12px 20px;
     font-size: 13px; font-weight: 500;
     opacity: 0; pointer-events: none;
@@ -194,8 +210,8 @@
 
   /* ── FOOTER ── */
   footer {
-    background: var(--panel); border-top: 1px solid var(--border);
-    padding: 8px 28px; font-size: 11px; color: var(--muted);
+    background: var(--black); border-top: 1px solid var(--black);
+    padding: 8px 28px; font-size: 11px; color: #cfd8d4;
     flex-shrink: 0;
   }
 </style>
@@ -216,6 +232,7 @@
   <button class="active" onclick="showTab('dashboard',this)">Dashboard</button>
   <button onclick="showTab('customers',this)">Customers</button>
   <button onclick="showTab('devices',this)">Devices</button>
+  <button onclick="showTab('email',this)">Email</button>
 </nav>
 
 <main>
@@ -231,11 +248,19 @@
       <div class="ctrl-sep"></div>
       <button class="btn btn-ghost" onclick="openExcel()">📂 &nbsp;Open Excel</button>
       <a class="btn btn-ghost" href="/api/download_excel" download>⬇ &nbsp;Download Excel</a>
+      <button class="btn btn-green" id="btn-send-email" onclick="sendReportEmail()">✉ &nbsp;Send Email Now</button>
     </div>
 
-    <div class="info-card">
-      <div class="label">Latest output file</div>
-      <div class="value" id="latest-file">{{ latest_file }}</div>
+    <div class="info-grid">
+      <div class="info-card">
+        <div class="label">Latest output file</div>
+        <div class="value" id="latest-file">{{ latest_file }}</div>
+      </div>
+      <div class="info-card">
+        <div class="label">Report email</div>
+        <div class="value" id="email-state">Checking…</div>
+        <div class="subvalue" id="email-recipients">—</div>
+      </div>
     </div>
 
     <div class="log-label">Activity Log</div>
@@ -318,10 +343,40 @@
 
   </section>
 
+  <!-- ════════════════════════════════
+       PAGE: EMAIL
+  ════════════════════════════════ -->
+  <section class="page" id="tab-email">
+
+    <div class="form-card">
+      <h2>Add Report Recipient</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Email Address</label>
+          <input type="email" id="email-address" placeholder="e.g. name@company.com" />
+        </div>
+        <button class="btn btn-green" onclick="addEmailRecipient()">+ Add</button>
+      </div>
+      <p class="form-hint">Recipients are saved to <code>email_config.json</code> and used for automatic and manual report emails.</p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Email Address</th><th>Action</th></tr>
+        </thead>
+        <tbody id="email-tbody">
+          <tr><td colspan="2" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </section>
+
 </main>
 
 <!-- FOOTER -->
-<footer>Outlook Weekend Monitoring Tool &nbsp;•&nbsp; Juniper BNC CFTS</footer>
+<footer>Outlook Weekend Monitoring Tool &nbsp;•&nbsp; Juniper BNG CFTS</footer>
 
 <!-- TOAST -->
 <div id="toast"></div>
@@ -335,6 +390,7 @@ function showTab(id, btn) {
   btn.classList.add('active');
   if (id === 'customers') loadCustomers();
   if (id === 'devices')   loadDevices();
+  if (id === 'email')     loadEmailRecipients();
 }
 
 // ── TOAST ──────────────────────────────────────────────────────────────────
@@ -370,9 +426,23 @@ async function pollStatus() {
     // buttons
     document.getElementById('btn-start').disabled = d.running;
     document.getElementById('btn-stop').disabled  = !d.running;
+    document.getElementById('btn-send-email').disabled =
+      d.email_sending || !d.email || !d.email.configured;
+    document.getElementById('btn-send-email').textContent =
+      d.email_sending ? 'Sending Email…' : '✉  Send Email Now';
 
     // file name
     document.getElementById('latest-file').textContent = d.latest_file;
+
+    // email status
+    if (d.email) {
+      document.getElementById('email-state').textContent =
+        d.email.configured ? d.email.message : 'Not configured';
+      document.getElementById('email-recipients').textContent =
+        d.email.recipients && d.email.recipients.length
+          ? d.email.recipients.join(', ')
+          : d.email.message;
+    }
 
     // log
     if (d.logs.length !== lastLogCount) {
@@ -409,6 +479,38 @@ async function startAuto() {
 
 async function stopAuto() {
   await fetch('/api/stop', {method:'POST'});
+}
+
+async function sendReportEmail() {
+  const btn = document.getElementById('btn-send-email');
+  btn.disabled = true;
+  btn.textContent = 'Sending Email…';
+  try {
+    const statusResp = await fetch('/api/status');
+    const status = await statusResp.json();
+    const recipients = status.email && status.email.recipients ? status.email.recipients : [];
+    if (!recipients.length) {
+      toast('Add at least one email recipient first.', 'err');
+      pollStatus();
+      return;
+    }
+
+    const ok = confirm(
+      'Send weekend report email to these recipients?\n\n' +
+      recipients.join('\n')
+    );
+    if (!ok) {
+      pollStatus();
+      return;
+    }
+
+    const r = await fetch('/api/send_report', {method:'POST'});
+    const d = await r.json();
+    toast(d.msg || (d.ok ? 'Email send started.' : 'Email send failed.'), d.ok ? 'ok' : 'err');
+    pollStatus();
+  } catch(e) {
+    toast('Email send failed.', 'err');
+  }
 }
 
 function openExcel() {
@@ -486,11 +588,72 @@ async function addDevice() {
   }
 }
 
+// ── EMAIL RECIPIENTS ──────────────────────────────────────────────────────
+async function loadEmailRecipients() {
+  const r = await fetch('/api/email_recipients');
+  const data = await r.json();
+  const tb = document.getElementById('email-tbody');
+  if (!data.length) {
+    tb.innerHTML = '<tr><td colspan="2" class="muted" style="text-align:center;padding:24px">No email recipients added yet.</td></tr>';
+    return;
+  }
+  tb.innerHTML = data.map(email =>
+    `<tr>
+      <td>${esc(email)}</td>
+      <td><button class="btn btn-red table-action" data-email="${escAttr(email)}" onclick="removeEmailRecipient(this.dataset.email)">Remove</button></td>
+    </tr>`
+  ).join('');
+}
+
+async function addEmailRecipient() {
+  const input = document.getElementById('email-address');
+  const email = input.value.trim();
+  if (!email) { toast('Enter an email address.','err'); return; }
+
+  const r = await fetch('/api/email_recipients', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({email})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast(`Recipient '${email}' added!`, 'ok');
+    input.value = '';
+    loadEmailRecipients();
+    pollStatus();
+  } else {
+    toast(d.msg || 'Failed to add recipient.', 'err');
+  }
+}
+
+async function removeEmailRecipient(email) {
+  const ok = confirm(`Remove ${email} from report emails?`);
+  if (!ok) return;
+
+  const r = await fetch('/api/email_recipients/remove', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({email})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast(`Recipient '${email}' removed.`, 'ok');
+    loadEmailRecipients();
+    pollStatus();
+  } else {
+    toast(d.msg || 'Failed to remove recipient.', 'err');
+  }
+}
+
 // ── UTILS ─────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escAttr(s) {
+  return esc(s).replace(/'/g,'&#39;');
 }
 </script>
 </body>

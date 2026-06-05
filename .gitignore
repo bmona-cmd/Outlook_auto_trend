@@ -19,3 +19,5 @@ data/
 .DS_Store
 
 customer_vertical_mapping.xlsx
+
+config.json
