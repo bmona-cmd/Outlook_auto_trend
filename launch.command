@@ -1,7 +1,9 @@
 #!/bin/bash
- 
-cd "/Users/kshree/Documents/Outlook Automation"
- 
-source venv/bin/activate
- 
-python3 gui.py
+
+cd "$(dirname "$0")"
+
+if [ -d "venv" ]; then
+  source venv/bin/activate
+fi
+
+python3 app.py

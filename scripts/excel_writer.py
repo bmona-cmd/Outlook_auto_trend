@@ -171,3 +171,51 @@ def append_to_excel(data):
     )
 
     adjust_column_width(output_file)
+
+
+def technology_missing_for_case(case_number):
+
+    if not case_number:
+        return False
+
+    output_file = get_output_file()
+
+    if not output_file.exists():
+        return False
+
+    try:
+
+        df = pd.read_excel(
+            output_file,
+            engine="openpyxl"
+        )
+
+    except:
+
+        return False
+
+    if (
+        "Case#" not in df.columns
+        or
+        "Technology" not in df.columns
+    ):
+        return False
+
+    rows = df[
+        df["Case#"].astype(str).str.strip()
+        == str(case_number).strip()
+    ]
+
+    if rows.empty:
+        return False
+
+    technology = rows.iloc[-1].get(
+        "Technology",
+        ""
+    )
+
+    return (
+        pd.isna(technology)
+        or
+        not str(technology).strip()
+    )

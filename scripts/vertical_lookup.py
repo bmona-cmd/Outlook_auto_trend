@@ -2,6 +2,8 @@ import pandas as pd
 
 from pathlib import Path
 
+from collections import Counter
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -16,14 +18,54 @@ vertical_map = {}
 
 original_company_names = {}
 
+normalized_vertical_map = {}
+
+normalized_original_company_names = {}
+
+first_word_vertical_map = {}
+
+
+def normalize_customer_name(customer_name):
+
+    if not customer_name:
+        return ""
+
+    customer_name = str(customer_name).lower().strip()
+
+    customer_name = customer_name.replace(".", " ")
+
+    import re
+
+    customer_name = re.sub(
+        r'[\|\:\,\-\/\[\]\(\)_]+',
+        ' ',
+        customer_name
+    )
+
+    customer_name = re.sub(
+        r'\s+',
+        ' ',
+        customer_name
+    )
+
+    return customer_name.strip()
+
 
 def load_vertical_mapping():
 
     global vertical_map
     global original_company_names
+    global normalized_vertical_map
+    global normalized_original_company_names
+    global first_word_vertical_map
 
     vertical_map = {}
     original_company_names = {}
+    normalized_vertical_map = {}
+    normalized_original_company_names = {}
+    first_word_vertical_map = {}
+    first_word_candidates = {}
+    first_word_counts = {}
 
     if not MAPPING_FILE.exists():
 
@@ -120,6 +162,56 @@ def load_vertical_mapping():
                 customer_lower
             ] = customer
 
+            normalized_customer = normalize_customer_name(
+                customer
+            )
+
+            if normalized_customer:
+
+                normalized_vertical_map[
+                    normalized_customer
+                ] = vertical
+
+                normalized_original_company_names[
+                    normalized_customer
+                ] = customer
+
+                first_word = normalized_customer.split()[0]
+
+                first_word_candidates.setdefault(
+                    first_word,
+                    set()
+                ).add(vertical)
+
+                first_word_counts.setdefault(
+                    first_word,
+                    Counter()
+                )[vertical] += 1
+
+        for first_word, verticals in first_word_candidates.items():
+
+            if len(verticals) == 1:
+
+                first_word_vertical_map[
+                    first_word
+                ] = next(iter(verticals))
+
+                continue
+
+            most_common_vertical, count = first_word_counts[
+                first_word
+            ].most_common(1)[0]
+
+            total_count = sum(
+                first_word_counts[first_word].values()
+            )
+
+            if count / total_count >= 0.8:
+
+                first_word_vertical_map[
+                    first_word
+                ] = most_common_vertical
+
         print(
             f"Loaded {len(vertical_map)} customers"
         )
@@ -141,10 +233,38 @@ def get_vertical(customer_name):
     if not customer_name:
         return ""
 
-    return vertical_map.get(
-        customer_name.lower().strip(),
+    customer_key = customer_name.lower().strip()
+
+    vertical = vertical_map.get(
+        customer_key,
         ""
     )
+
+    if vertical:
+        return vertical
+
+    normalized_customer = normalize_customer_name(
+        customer_name
+    )
+
+    vertical = normalized_vertical_map.get(
+        normalized_customer,
+        ""
+    )
+
+    if vertical:
+        return vertical
+
+    if normalized_customer:
+
+        first_word = normalized_customer.split()[0]
+
+        return first_word_vertical_map.get(
+            first_word,
+            ""
+        )
+
+    return ""
 
 
 def get_original_company_name(customer_name):
@@ -152,7 +272,21 @@ def get_original_company_name(customer_name):
     if not customer_name:
         return ""
 
-    return original_company_names.get(
-        customer_name.lower().strip(),
+    customer_key = customer_name.lower().strip()
+
+    original_name = original_company_names.get(
+        customer_key,
+        ""
+    )
+
+    if original_name:
+        return original_name
+
+    normalized_customer = normalize_customer_name(
+        customer_name
+    )
+
+    return normalized_original_company_names.get(
+        normalized_customer,
         customer_name
     )

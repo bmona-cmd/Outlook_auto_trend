@@ -1,11 +1,14 @@
 from playwright.sync_api import sync_playwright
-RUNNING = False
+
 from scripts.parser import (
     extract_case_details,
     should_skip_mail
 )
 
-from scripts.excel_writer import append_to_excel
+from scripts.excel_writer import (
+    append_to_excel,
+    technology_missing_for_case
+)
 
 from scripts.tracker import (
     already_processed,
@@ -47,11 +50,12 @@ JUNK = [
 # TEST_MODE = True  → any day / any time
 # TEST_MODE = False → Sat+Sun 06:30–18:30 IST
 # ──────────────────────────────────────────
-TEST_MODE  = True
+TEST_MODE  = True 
 IST        = timezone(timedelta(hours=5, minutes=30))
 WIN_START  = (6,  30)
 WIN_END    = (18, 30)
 SLEEP_SECS = 300          # 5 min between scans
+RUNNING    = False
 
 TIME_RE = re.compile(
     r'\b(\d{1,2}):(\d{2})\s*(AM|PM)\b', re.IGNORECASE
@@ -84,6 +88,13 @@ def within_window():
     if n.weekday() not in (5, 6):
         return False
     return win_start_mins() <= _mins(n.hour, n.minute) <= win_end_mins()
+
+
+def sleep_while_running(seconds):
+    for _ in range(seconds):
+        if not RUNNING:
+            return
+        time.sleep(1)
 
 
 # ──────────────────────────────────────────
@@ -142,7 +153,15 @@ def get_subject(row_text):
             and bool(re.search(r'\b\d{4}-\d{3,5}-\d{4,}\b', line))
             and bool(re.search(r'\bp[12]\b', low))
         )
-        is_junk = any(j in low for j in JUNK)
+        # Remove priority-change arrows before junk check
+        # so "P1 > P2" doesn't trigger the ">" junk filter
+        line_for_junk = re.sub(
+            r'\bP[1-5]\s*[-=]?>\s*P[1-5]\b',
+            'PRICHANGE',
+            line,
+            flags=re.IGNORECASE
+        )
+        is_junk = any(j in line_for_junk.lower() for j in JUNK)
         if (has_kw or has_re) and not is_junk:
             return re.sub(r'\s+', ' ', line).strip()
     return ""
@@ -156,12 +175,35 @@ def _norm(s):
     s = re.sub(r'^(re|fw|fwd)\s*:\s*', '', s.strip().lower())
     return re.sub(r'\s+', ' ', s).strip()
 
+def _row_timestamp(row_text):
+    """Extract the time string from the row for use in ID."""
+    m = TIME_RE.search(row_text)
+    if m:
+        return m.group(0).strip().lower().replace(" ", "")
+    return "notime"
+
 def make_id(details, subject):
     case = details.get("Case#", "").strip()
     typ  = details.get("Case Delivery Type", "").lower().strip()
     if case and typ:  return f"{case}_{typ}"
     if case:          return f"{case}_unknown"
     return f"subj_{_norm(subject)}"
+
+def make_scan_sid(subject, row_text):
+    """
+    Dedup key used WITHIN a scan run.
+    Combines normalised subject + received time so
+    a new mail with the same subject arriving later
+    is not blocked by a previously processed one.
+    Case# is the most stable anchor — use it when
+    available so re-forwards of same case are deduped.
+    """
+    case_match = re.search(
+        r'\b(\d{4}-\d{3,5}-\d{4,})\b', subject
+    )
+    if case_match:
+        return f"case_{case_match.group(1)}"
+    return f"subj_{_norm(subject)}_{_row_timestamp(row_text)}"
 
 
 # ──────────────────────────────────────────
@@ -217,7 +259,7 @@ def process_mail(page, el, row_text, idx):
     if ts is False:
         return "stop"
     if ts is None:
-        return "skipped"          # no timestamp → skip quietly
+        return "skipped"
 
     low = row_text.lower()
 
@@ -232,10 +274,23 @@ def process_mail(page, el, row_text, idx):
         return "skipped"
 
     # 3. P1/P2 only
-    pm = re.search(r'\bP([1-5])\b', row_text, re.IGNORECASE)
-    if pm and int(pm.group(1)) not in (1, 2):
-        print(f"    [{idx}] P{pm.group(1)} — skipped")
-        return "skipped"
+    # Check for priority-change pattern first (P1>P2, P1->P2)
+    # and use the RIGHT side as the current priority.
+    change_pm = re.search(
+        r'\bP[1-5]\s*[-=]?>\s*(P([1-5]))\b',
+        row_text,
+        re.IGNORECASE
+    )
+    if change_pm:
+        level = int(change_pm.group(2))
+        if level not in (1, 2):
+            print(f"    [{idx}] P{level} (after change) — skipped")
+            return "skipped"
+    else:
+        pm = re.search(r'\bP([1-5])\b', row_text, re.IGNORECASE)
+        if pm and int(pm.group(1)) not in (1, 2):
+            print(f"    [{idx}] P{pm.group(1)} — skipped")
+            return "skipped"
 
     # 4. Subject
     subject = get_subject(row_text)
@@ -249,9 +304,52 @@ def process_mail(page, el, row_text, idx):
         print("       → ack/reply — skipped")
         return "skipped"
 
-    # 5. Dedup
-    sid = f"subj_{_norm(subject)}"
-    if already_processed(sid):
+    # 5. Dedup against processed_mails.json
+    #    Use case#+delivery_type as key when available
+    #    (most specific). For new mails the delivery
+    #    type isn't known yet so we check case# alone
+    #    first — if same case+type already saved, skip.
+    case_match = re.search(
+        r'\b(\d{4}-\d{3,5}-\d{4,})\b', subject
+    )
+    case_num = case_match.group(1) if case_match else ""
+    needs_technology_update = technology_missing_for_case(
+        case_num
+    )
+
+    # Check if this exact case was already fully saved
+    # (any delivery type) — avoid re-saving same case twice
+    if (
+        case_num
+        and
+        already_processed(f"{case_num}_handover")
+        and
+        not needs_technology_update
+    ):
+        print("       → already processed (handover)")
+        return "already"
+    if (
+        case_num
+        and
+        already_processed(f"{case_num}_dispatch p1")
+        and
+        not needs_technology_update
+    ):
+        print("       → already processed (dispatch p1)")
+        return "already"
+    if (
+        case_num
+        and
+        already_processed(f"{case_num}_dispatch p2")
+        and
+        not needs_technology_update
+    ):
+        print("       → already processed (dispatch p2)")
+        return "already"
+
+    # For no-case# mails use subject+time key
+    sid = make_scan_sid(subject, row_text)
+    if already_processed(sid) and not needs_technology_update:
         print("       → already processed")
         return "already"
 
@@ -370,9 +468,17 @@ def run_one_scan(page):
             if is_pinned_row(el, text):
                 continue
 
-            # Build a short fingerprint to know if we've
-            # seen this exact row in this scan already
-            fp = _norm(text[:120])
+            # Build fingerprint for within-scan dedup
+            # (prevents processing same row twice as we scroll)
+            # Use case# if present, else subject+time
+            fp_case = re.search(r'\b(\d{4}-\d{3,5}-\d{4,})\b', text)
+            fp_time = TIME_RE.search(text)
+            if fp_case and fp_time:
+                fp = f"{fp_case.group(1)}_{fp_time.group(0).replace(' ','').lower()}"
+            elif fp_case:
+                fp = fp_case.group(1)
+            else:
+                fp = _norm(text[:120])
             if fp in processed_ids:
                 continue
 
@@ -440,21 +546,15 @@ def run_one_scan(page):
 # ──────────────────────────────────────────
 
 def run_mail_reader():
+    global RUNNING
+
+    RUNNING = True
 
     with sync_playwright() as p:
 
-        CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-
-        browser = p.chromium.launch(
-            executable_path=CHROME_PATH,
-            headless=False
-        )
-
-        context = browser.new_context(
-            storage_state=str(AUTH_FILE)
-        )
-
-        page = context.new_page()
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context(storage_state=str(AUTH_FILE))
+        page    = context.new_page()
 
         print("\nOpening Outlook...")
         page.goto(
@@ -474,7 +574,7 @@ def run_mail_reader():
                         f"Outside window "
                         f"[{n.strftime('%a %H:%M')} IST] — sleeping 60s"
                     )
-                    time.sleep(60)
+                    sleep_while_running(60)
                     continue
 
                 n   = ist_now()
@@ -514,7 +614,7 @@ def run_mail_reader():
                     f"[now {n.strftime('%H:%M')} — "
                     f"next ~{wake.strftime('%H:%M')} IST]"
                 )
-                time.sleep(SLEEP_SECS)
+                sleep_while_running(SLEEP_SECS)
 
             except Exception as e:
                 logger.error(str(e))
@@ -524,4 +624,6 @@ def run_mail_reader():
                     page.wait_for_timeout(10000)
                 except:
                     pass
-                time.sleep(30)
+                sleep_while_running(30)
+
+        RUNNING = False

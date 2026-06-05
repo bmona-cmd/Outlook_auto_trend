@@ -2,6 +2,10 @@ import re
 
 from scripts.vertical_lookup import (
     get_vertical,
+    get_original_company_name,
+    first_word_vertical_map,
+    normalize_customer_name,
+    normalized_vertical_map,
     vertical_map
 )
 
@@ -16,6 +20,7 @@ DEVICE_TECH_MAP = {
     "acx": "Routing",
 
     "srx": "Security",
+    "vsrx": "Security",
     "ssg": "Security",
 
     "qfx": "Switching",
@@ -26,6 +31,17 @@ DEVICE_TECH_MAP = {
     "128t": "SDWAN",
 
     "software": "Software"
+}
+
+
+TEAM_TECH_MAP = {
+
+    "routing": "Routing",
+    "switching": "Switching",
+    "security": "Security",
+    "software": "Software",
+    "wireless": "Wireless",
+    "sdwan": "SDWAN"
 }
 
 # ==========================================
@@ -162,10 +178,10 @@ def should_skip_mail(subject):
     )
 
     has_priority = bool(
-        re.search(
-            r'\bp[12]\b',
-            lower_subject
-        )
+        re.search(r'\bp[12]\b', lower_subject)
+    ) or bool(
+        # P1>P2 or P1->P2 style — current priority is P1 or P2
+        re.search(r'\bp[1-5]\s*[-=]?>\s*p[12]\b', lower_subject)
     )
 
     if is_reply and not has_case_number and not has_priority:
@@ -219,6 +235,20 @@ def extract_case_number(subject):
 
 def extract_priority(subject):
 
+    # Handle priority change patterns first:
+    #   P1 > P2, P1 -> P2, P1>P2, P1->P2
+    # The RIGHT side is the current priority.
+
+    change = re.search(
+        r'\bP[1-5]\s*[-=]?>\s*(P[1-5])\b',
+        subject,
+        re.IGNORECASE
+    )
+
+    if change:
+        return change.group(1).upper()
+
+    # Standard single priority
     match = re.search(
         r'\bP[1-5]\b',
         subject,
@@ -326,12 +356,14 @@ def _get_device_pattern(keyword):
     return rf'\b{re.escape(keyword)}\d*\b'
 
 
-def extract_technology(subject, body=""):
+def extract_technology(subject, body="", cc_text=""):
 
     combined = (
         subject
         + " "
         + body
+        + " "
+        + cc_text
     ).lower()
 
     for keyword, tech in DEVICE_TECH_MAP.items():
@@ -344,6 +376,50 @@ def extract_technology(subject, body=""):
         ):
 
             return tech
+
+    recipient_text = (
+        body
+        + " "
+        + cc_text
+    ).lower()
+
+    tech_scores = {}
+
+    for keyword, tech in TEAM_TECH_MAP.items():
+
+        patterns = [
+
+            rf'\b[a-z0-9._%+\-]*{keyword}[a-z0-9._%+\-]*@',
+
+            rf'\barc[-\w]*{keyword}[-\w]*\b',
+
+            rf'\b{keyword}\s*team\b',
+
+            rf'\b{keyword}\s*@'
+        ]
+
+        score = 0
+
+        for pattern in patterns:
+
+            score += len(
+                re.findall(
+                    pattern,
+                    recipient_text,
+                    re.IGNORECASE
+                )
+            )
+
+        if score:
+
+            tech_scores[tech] = score
+
+    if tech_scores:
+
+        return max(
+            tech_scores,
+            key=tech_scores.get
+        )
 
     return ""
 
@@ -414,6 +490,166 @@ def remove_known_patterns(text):
 
     return text.strip()
 
+
+def _format_customer_name(customer):
+
+    if not customer:
+        return ""
+
+    known_name = get_original_company_name(
+        customer
+    )
+
+    if known_name != customer:
+        return known_name
+
+    words = []
+
+    for word in str(customer).strip().split():
+
+        if word.isupper() or any(char.isdigit() for char in word):
+            words.append(word)
+        else:
+            words.append(word.capitalize())
+
+    return " ".join(words)
+
+
+def _first_word_has_vertical(customer):
+
+    normalized_customer = normalize_customer_name(
+        customer
+    )
+
+    if not normalized_customer:
+        return False
+
+    first_word = normalized_customer.split()[0]
+
+    return first_word in first_word_vertical_map
+
+
+def _trim_customer_words(words, start_index):
+
+    customer_words = []
+
+    for word in words[start_index:]:
+
+        normalized_word = normalize_customer_name(
+            word
+        )
+
+        if not normalized_word:
+            continue
+
+        if (
+            normalized_word in ["case", "sr", "pr", "p1", "p2", "p3", "p4", "p5"]
+            or
+            re.match(r'^\d{4}$', normalized_word)
+            or
+            re.match(r'^\d{4}\s+\d{3,5}\s+\d{4,}$', normalized_word)
+        ):
+            break
+
+        if normalized_word in DEVICE_TECH_MAP:
+            break
+
+        customer_words.append(
+            word
+        )
+
+        if len(customer_words) >= 4:
+            break
+
+    return " ".join(
+        customer_words
+    )
+
+
+def _find_first_word_customer(words):
+
+    for index, word in enumerate(words):
+
+        normalized_word = normalize_customer_name(
+            word
+        )
+
+        if normalized_word in first_word_vertical_map:
+
+            return _trim_customer_words(
+                words,
+                index
+            )
+
+    return ""
+
+
+def _extract_customer_candidate(text):
+
+    text = clean_subject(text)
+
+    if not text:
+        return ""
+
+    dispatch_match = re.search(
+        r'in\s+queue\s*:\s*.*?\s+-\s+(.+)$',
+        text,
+        re.IGNORECASE
+    )
+
+    if dispatch_match:
+
+        return dispatch_match.group(1).strip()
+
+    parts = [
+
+        part.strip()
+
+        for part in re.split(
+            r'\|\||\||:',
+            text
+        )
+
+        if part.strip()
+    ]
+
+    for part in parts:
+
+        cleaned_part = remove_known_patterns(
+            part
+        )
+
+        normalized_part = normalize_customer_name(
+            cleaned_part
+        )
+
+        if not normalized_part:
+            continue
+
+        if _first_word_has_vertical(
+            normalized_part
+        ):
+
+            return cleaned_part
+
+        part_candidate = _find_first_word_customer(
+            cleaned_part.split()
+        )
+
+        if part_candidate:
+
+            return part_candidate
+
+    cleaned = remove_known_patterns(
+        text
+    )
+
+    words = cleaned.split()
+
+    return _find_first_word_customer(
+        words
+    )
+
 # ==========================================
 # CUSTOMER EXTRACTION
 # ==========================================
@@ -427,12 +663,21 @@ def extract_customer(text):
         text
     )
 
-    cleaned = cleaned.lower()
+    cleaned = normalize_customer_name(
+        cleaned
+    )
+
+    cleaned_words = set(
+        cleaned.split()
+    )
 
     best_match = ""
     best_score = 0
+    best_word_count = 0
+    exact_match = ""
+    exact_word_count = 0
 
-    for excel_customer in vertical_map.keys():
+    for excel_customer in normalized_vertical_map.keys():
 
         customer_clean = (
             excel_customer
@@ -440,20 +685,35 @@ def extract_customer(text):
             .strip()
         )
 
-        customer_words = (
-            customer_clean.split()
-        )
+        customer_words = [
+
+            word
+
+            for word in customer_clean.split()
+
+            if len(word) > 1
+        ]
 
         matched_words = 0
 
         for word in customer_words:
 
-            if word in cleaned:
+            if word in cleaned_words:
 
                 matched_words += 1
 
         if not customer_words:
             continue
+
+        if (
+            customer_clean in cleaned
+            and
+            len(customer_words) > exact_word_count
+        ):
+
+            exact_match = excel_customer
+
+            exact_word_count = len(customer_words)
 
         score = (
             matched_words
@@ -465,19 +725,49 @@ def extract_customer(text):
         # BEST MATCH
         # ==================================
 
-        if score > best_score:
+        if (
+            score > best_score
+            or
+            (
+                score == best_score
+                and
+                len(customer_words) > best_word_count
+            )
+        ):
 
             best_score = score
 
             best_match = excel_customer
 
+            best_word_count = len(customer_words)
+
     # ======================================
     # MINIMUM CONFIDENCE
     # ======================================
 
-    if best_score >= 0.6:
+    if exact_match:
 
-        return best_match.title()
+        return _format_customer_name(
+            exact_match
+        )
+
+    customer_candidate = _extract_customer_candidate(
+        text
+    )
+
+    if _first_word_has_vertical(
+        customer_candidate
+    ):
+
+        return _format_customer_name(
+            customer_candidate
+        )
+
+    if best_score >= 0.85:
+
+        return _format_customer_name(
+            best_match
+        )
 
     return ""
 
@@ -490,12 +780,20 @@ def extract_vertical(customer):
     if not customer:
         return ""
 
-    lower_customer = (
-        customer.lower()
-        .strip()
+    vertical = get_vertical(
+        customer
     )
 
-    for company in vertical_map.keys():
+    if vertical:
+        return vertical
+
+    lower_customer = (
+        normalize_customer_name(
+            customer
+        )
+    )
+
+    for company in normalized_vertical_map.keys():
 
         if company in lower_customer:
 
@@ -602,7 +900,8 @@ def extract_case_details(
 
         "Technology": extract_technology(
             subject,
-            body
+            body,
+            cc_text
         ),
 
         "Case Delivery Type": delivery_type,

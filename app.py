@@ -1,17 +1,15 @@
 """
 app.py  —  Flask web UI for Weekend Mail Automation
-Place this file in the PROJECT ROOT (same level as run.py, gui.py, scripts/).
+Place this file in the PROJECT ROOT (same level as run.py and scripts/).
 Run:  python3 app.py
-Then open:  http://localhost:5000
+Then open:  http://localhost:5050
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
 from pathlib import Path
 import threading
 import json
-import shutil
-import tempfile
-import os
+import builtins
 
 # ── project imports (unchanged) ──────────────────────────────────────────────
 import scripts.read_mails as mail_reader
@@ -39,15 +37,14 @@ def push_log(msg: str):
 automation_thread = None
 
 # ── patch read_mails to also push to log_buffer ───────────────────────────────
-_orig_print = __builtins__["print"] if isinstance(__builtins__, dict) else print
+_orig_print = builtins.print
 
 def _log_print(*args, **kwargs):
     msg = " ".join(str(a) for a in args)
     push_log(msg)
     _orig_print(*args, **kwargs)
 
-import builtins
-builtins.print = _log_print   # redirect all prints to our log too
+mail_reader.print = _log_print   # redirect mail-reader prints to our log too
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -244,10 +241,10 @@ def _startup():
             p.DEVICE_TECH_MAP[kw] = tech
     except Exception:
         pass
-    push_log("Web UI ready. Open http://localhost:5000 in your browser.")
+    push_log("Web UI ready. Open http://localhost:5050 in your browser.")
 
 _startup()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)
