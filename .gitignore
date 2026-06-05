@@ -19,3 +19,7 @@ data/
 .DS_Store
 
 customer_vertical_mapping.xlsx
+
+#config
+config.json
+email_config.json

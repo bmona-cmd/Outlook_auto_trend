@@ -552,7 +552,10 @@ def run_mail_reader():
 
     with sync_playwright() as p:
 
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(
+            channel="chrome",
+            headless=False
+       )
         context = browser.new_context(storage_state=str(AUTH_FILE))
         page    = context.new_page()
 
