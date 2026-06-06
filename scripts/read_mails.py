@@ -17,6 +17,8 @@ from scripts.tracker import (
 
 from scripts.logger import logger
 
+from scripts.email_report import send_report          # ← NEW
+
 from pathlib import Path
 
 from datetime import datetime, timezone, timedelta
@@ -48,12 +50,19 @@ JUNK = [
 # ──────────────────────────────────────────
 # CONFIG
 # TEST_MODE = True  → any day / any time
-# TEST_MODE = False → Sat+Sun 06:30–18:30 IST
+# TEST_MODE = False → Fri-Sun weekend tracking:
+#   - Friday 18:30 → Saturday 03:00  (handover)
+#   - Saturday 03:00 → Saturday 24:00 (handover)
+#   - Sunday 03:00  → Sunday 24:00   (handover)
+#   - Saturday/Sunday 06:30 → 18:30 (dispatch)
 # ──────────────────────────────────────────
-TEST_MODE  = True 
+TEST_MODE  = False  
 IST        = timezone(timedelta(hours=5, minutes=30))
-WIN_START  = (6,  30)
-WIN_END    = (18, 30)
+HANDOVER_START  = (3,  0)
+HANDOVER_END    = (23, 59)
+FRIDAY_HANDOVER_START = (18, 30)
+DISPATCH_START  = (6,  30)
+DISPATCH_END    = (18, 30)
 SLEEP_SECS = 300          # 5 min between scans
 RUNNING    = False
 
@@ -75,19 +84,57 @@ def ist_now():
 def _mins(h, m):
     return h * 60 + m
 
-def win_start_mins():
-    return _mins(*WIN_START)
+def handover_start_mins():
+    return _mins(*HANDOVER_START)
 
-def win_end_mins():
-    return _mins(*WIN_END)
+def handover_end_mins():
+    return _mins(*HANDOVER_END)
+
+def dispatch_start_mins():
+    return _mins(*DISPATCH_START)
+
+def dispatch_end_mins():
+    return _mins(*DISPATCH_END)
+
+def friday_handover_start_mins():
+    return _mins(*FRIDAY_HANDOVER_START)
+
+def scan_start_mins(now=None):
+    if now is None:
+        now = ist_now()
+    if now.weekday() == 4:  # Friday evening handover window
+        return friday_handover_start_mins()
+    if now.weekday() == 5:  # Saturday tracks all Saturday handovers
+        return 0
+    if now.weekday() == 6:  # Sunday starts at 03:00
+        return handover_start_mins()
+    return handover_start_mins()
+
+def scan_end_mins():
+    return max(handover_end_mins(), dispatch_end_mins())
+
+def is_handover_time(row_mins, now=None):
+    if now is None:
+        now = ist_now()
+    if handover_start_mins() <= row_mins <= handover_end_mins():
+        return True
+    if now.weekday() == 4 and row_mins >= friday_handover_start_mins():
+        return True
+    if now.weekday() == 5 and row_mins < handover_start_mins():
+        return True
+    return False
 
 def within_window():
     if TEST_MODE:
         return True
     n = ist_now()
-    if n.weekday() not in (5, 6):
-        return False
-    return win_start_mins() <= _mins(n.hour, n.minute) <= win_end_mins()
+    if n.weekday() == 4:
+        return _mins(n.hour, n.minute) >= friday_handover_start_mins()
+    if n.weekday() == 5:
+        return True
+    if n.weekday() == 6:
+        return _mins(n.hour, n.minute) >= handover_start_mins()
+    return False
 
 
 def sleep_while_running(seconds):
@@ -99,23 +146,36 @@ def sleep_while_running(seconds):
 
 # ──────────────────────────────────────────
 # ROW TIMESTAMP CHECK
-#   True  → inside 06:30–18:30
-#   False → before window or stale (old date)
-#   None  → no readable timestamp
+#   True      → inside matching delivery-type window
+#   False     → outside matching window, but keep scanning
+#   "stop"    → before all report windows or stale (old date)
+#   None      → no readable timestamp
 # ──────────────────────────────────────────
 
-def row_in_window(text):
-    if TEST_MODE:
-        return True
+def delivery_type_hints(text):
+    low = text.lower()
+    hints = set()
 
+    if "dispatch" in low:
+        hints.add("dispatch")
+
+    if any(sig in low for sig in (
+        "handover", "[ho]", "ho:", "ho created", "-ho",
+        "[ho-mw]", "ho-mw", "| ho |", "|ho|", "case created"
+    )):
+        hints.add("handover")
+
+    return hints
+
+def _row_time_mins(text):
     low = text.lower()
 
     for sig in STALE:
         if sig in low:
-            return False
+            return "stale"
 
     if re.search(r'\b\d{2}/\d{2}/\d{2}\b', text):
-        return False
+        return "stale"
 
     m = TIME_RE.search(text)
     if not m:
@@ -130,7 +190,37 @@ def row_in_window(text):
     if ap == "AM" and h == 12:
         h = 0
 
-    return win_start_mins() <= _mins(h, mn) <= win_end_mins()
+    return _mins(h, mn)
+
+def row_in_window(text):
+    if TEST_MODE:
+        return True
+
+    row_mins = _row_time_mins(text)
+
+    if row_mins is None:
+        return None
+
+    if row_mins == "stale" or row_mins < scan_start_mins():
+        return "stop"
+
+    hints = delivery_type_hints(text)
+
+    if "handover" in hints and is_handover_time(row_mins):
+        return True
+
+    if "dispatch" in hints and dispatch_start_mins() <= row_mins <= dispatch_end_mins():
+        return True
+
+    # Replies or ambiguous rows may not carry a clear delivery type until opened.
+    # Keep them eligible when they fall into either valid reporting window.
+    if not hints:
+        return (
+            is_handover_time(row_mins)
+            or dispatch_start_mins() <= row_mins <= dispatch_end_mins()
+        )
+
+    return False
 
 
 # ──────────────────────────────────────────
@@ -251,13 +341,15 @@ def process_mail(page, el, row_text, idx):
       "saved"   – extracted and written to Excel
       "already" – already in processed_mails.json
       "skipped" – not relevant / P3-P5 / no case
-      "stop"    – row is before 06:30 (caller stops scan)
+      "stop"    – row is before all report windows (caller stops scan)
     """
 
     # 1. Time check
     ts = row_in_window(row_text)
-    if ts is False:
+    if ts == "stop":
         return "stop"
+    if ts is False:
+        return "skipped"
     if ts is None:
         return "skipped"
 
@@ -489,7 +581,7 @@ def run_one_scan(page):
 
             if result == "stop":
                 print(
-                    "\n  Pre-06:30 mail reached — "
+                    "\n  Pre-03:00 mail reached — "
                     "scan complete up to window boundary"
                 )
                 print(
@@ -539,23 +631,33 @@ def run_one_scan(page):
 #   1. Reload Outlook (fresh inbox state)
 #   2. Scroll through ENTIRE inbox row by row
 #      processing every mail as we go,
-#      stopping when we hit a pre-06:30 mail
+#      stopping when we hit a pre-window mail
 #      or the inbox bottom
 #   3. Sleep 5 minutes
-#   4. Repeat until 18:30 IST
+#   4. Repeat until the configured weekend window ends
+#   5. After window closes — send Excel report by email
 # ──────────────────────────────────────────
+
+# Track if report has been sent this session
+# so it doesn't send multiple times
+_report_sent_today = None
+
+CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
 
 def run_mail_reader():
     global RUNNING
 
     RUNNING = True
 
+    global _report_sent_today
+
     with sync_playwright() as p:
 
         browser = p.chromium.launch(
-            channel="chrome",
+            executable_path=CHROME_PATH,
             headless=False
-       )
+        )
         context = browser.new_context(storage_state=str(AUTH_FILE))
         page    = context.new_page()
 
@@ -572,7 +674,59 @@ def run_mail_reader():
             try:
 
                 if not within_window():
-                    n = ist_now()
+
+                    n        = ist_now()
+                    today    = n.date()
+                    yesterday = today - timedelta(days=1)
+
+                    # ── Send report once after window closes ──
+                    if (
+                        not TEST_MODE
+                        and _report_sent_today != today
+                        and n.weekday() in (5, 6)
+                        and _mins(n.hour, n.minute) >= scan_end_mins()
+                    ):
+                        print(
+                            f"\n{'='*55}\n"
+                            f"WINDOW CLOSED [{n.strftime('%H:%M')} IST]"
+                            f" — Sending report email...\n"
+                            f"{'='*55}"
+                        )
+                        send_report(target_date=today)
+                        _report_sent_today = today
+
+                    elif (
+                        not TEST_MODE
+                        and _report_sent_today != yesterday
+                        and n.weekday() == 6
+                        and yesterday.weekday() == 5
+                        and _mins(n.hour, n.minute) < handover_start_mins()
+                    ):
+                        print(
+                            f"\n{'='*55}\n"
+                            f"WINDOW CLOSED [Saturday missed] [{n.strftime('%H:%M')} IST]"
+                            f" — Sending Saturday report email...\n"
+                            f"{'='*55}"
+                        )
+                        send_report(target_date=yesterday)
+                        _report_sent_today = yesterday
+
+                    elif (
+                        not TEST_MODE
+                        and _report_sent_today != yesterday
+                        and n.weekday() == 0
+                        and yesterday.weekday() == 6
+                        and _mins(n.hour, n.minute) < handover_start_mins()
+                    ):
+                        print(
+                            f"\n{'='*55}\n"
+                            f"WINDOW CLOSED [Sunday missed] [{n.strftime('%H:%M')} IST]"
+                            f" — Sending Sunday report email...\n"
+                            f"{'='*55}"
+                        )
+                        send_report(target_date=yesterday)
+                        _report_sent_today = yesterday
+
                     print(
                         f"Outside window "
                         f"[{n.strftime('%a %H:%M')} IST] — sleeping 60s"

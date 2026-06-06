@@ -160,7 +160,7 @@ def _send_via_applescript(recipients, subject, body, excel_file):
 # MAIN — SEND REPORT
 # ==========================================
 
-def send_report():
+def send_report(target_date=None):
 
     try:
 
@@ -173,7 +173,7 @@ def send_report():
 
         excel_file = get_latest_excel()
 
-        now      = datetime.now()
+        now      = target_date or datetime.now()
         weekday  = now.weekday()
         day_name = (
             "Saturday" if weekday == 5
