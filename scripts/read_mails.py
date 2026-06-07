@@ -59,8 +59,7 @@ JUNK = [
 TEST_MODE  = False  
 IST        = timezone(timedelta(hours=5, minutes=30))
 HANDOVER_START  = (3,  0)
-HANDOVER_END    = (23, 59)
-FRIDAY_HANDOVER_START = (18, 30)
+HANDOVER_END    = (24, 0)   # midnight (end of day)
 DISPATCH_START  = (6,  30)
 DISPATCH_END    = (18, 30)
 SLEEP_SECS = 300          # 5 min between scans
@@ -73,6 +72,58 @@ STALE = [
     "yesterday",
     "monday","tuesday","wednesday","thursday","friday"
 ]
+
+def get_stale_words():
+    """
+    Dynamic stale-word list based on current day.
+    On Sunday  -> also stale: saturday, sat
+    On Saturday -> nothing extra (saturday is today)
+    """
+    words = list(STALE)
+    if ist_now().weekday() == 6:   # Sunday
+        words += ["saturday", "sat"]
+    return words
+
+
+def is_row_from_today(el) -> bool:
+    """
+    Read the aria-label on the Outlook row element.
+    Outlook sets aria-label to e.g.:
+      'Received Saturday June 7, ...'   (yesterday, on Sunday)
+      'Received Sunday June 8, ...'     (today, on Sunday)
+    We compare the date in the label to today's IST date.
+    Falls back to True (don't block) if aria-label is unavailable.
+    """
+    try:
+        aria = el.get_attribute("aria-label") or ""
+        if not aria:
+            return True  # can't tell -- don't block
+
+        import re as _re
+        # Match month name + day number e.g. "June 7" or "Jun 7"
+        m = _re.search(
+            r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|'            r'Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|'            r'Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})',
+            aria, _re.IGNORECASE
+        )
+        if not m:
+            return True  # can't parse -- don't block
+
+        month_str = m.group(1)[:3].lower()
+        day_num   = int(m.group(2))
+
+        month_map = {
+            "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+            "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12
+        }
+        month_num = month_map.get(month_str)
+        if not month_num:
+            return True
+
+        now = ist_now()
+        return now.month == month_num and now.day == day_num
+
+    except Exception:
+        return True  # on any error -- don't block
 
 # ──────────────────────────────────────────
 # HELPERS
@@ -88,7 +139,7 @@ def handover_start_mins():
     return _mins(*HANDOVER_START)
 
 def handover_end_mins():
-    return _mins(*HANDOVER_END)
+    return _mins(*HANDOVER_END)   # 1440 = midnight
 
 def dispatch_start_mins():
     return _mins(*DISPATCH_START)
@@ -96,45 +147,28 @@ def dispatch_start_mins():
 def dispatch_end_mins():
     return _mins(*DISPATCH_END)
 
-def friday_handover_start_mins():
-    return _mins(*FRIDAY_HANDOVER_START)
-
 def scan_start_mins(now=None):
-    if now is None:
-        now = ist_now()
-    if now.weekday() == 4:  # Friday evening handover window
-        return friday_handover_start_mins()
-    if now.weekday() == 5:  # Saturday tracks all Saturday handovers
-        return 0
-    if now.weekday() == 6:  # Sunday starts at 03:00
-        return handover_start_mins()
+    # Both Saturday and Sunday: start scanning from 03:00
     return handover_start_mins()
 
 def scan_end_mins():
-    return max(handover_end_mins(), dispatch_end_mins())
+    # Latest boundary = midnight (1440)
+    return handover_end_mins()
 
 def is_handover_time(row_mins, now=None):
-    if now is None:
-        now = ist_now()
-    if handover_start_mins() <= row_mins <= handover_end_mins():
-        return True
-    if now.weekday() == 4 and row_mins >= friday_handover_start_mins():
-        return True
-    if now.weekday() == 5 and row_mins < handover_start_mins():
-        return True
-    return False
+    # Handover window: 03:00 – midnight
+    return handover_start_mins() <= row_mins <= handover_end_mins()
 
 def within_window():
     if TEST_MODE:
         return True
     n = ist_now()
-    if n.weekday() == 4:
-        return _mins(n.hour, n.minute) >= friday_handover_start_mins()
-    if n.weekday() == 5:
-        return True
-    if n.weekday() == 6:
-        return _mins(n.hour, n.minute) >= handover_start_mins()
-    return False
+    # Active only on Saturday and Sunday
+    if n.weekday() not in (5, 6):
+        return False
+    now_mins = _mins(n.hour, n.minute)
+    # Window open from 03:00 through midnight
+    return now_mins >= handover_start_mins()
 
 
 def sleep_while_running(seconds):
@@ -170,7 +204,7 @@ def delivery_type_hints(text):
 def _row_time_mins(text):
     low = text.lower()
 
-    for sig in STALE:
+    for sig in get_stale_words():
         if sig in low:
             return "stale"
 
@@ -201,7 +235,7 @@ def row_in_window(text):
     if row_mins is None:
         return None
 
-    if row_mins == "stale" or row_mins < scan_start_mins():
+    if row_mins == "stale" or row_mins < handover_start_mins():
         return "stop"
 
     hints = delivery_type_hints(text)
@@ -577,6 +611,21 @@ def run_one_scan(page):
             processed_ids.add(fp)
             found_new = True
 
+            # ── DATE GATE ────────────────────────────────────────────
+            # Check aria-label to confirm this row belongs to TODAY.
+            # This catches two problems:
+            #   1. Yesterday's emails Outlook shows with just a time
+            #      (e.g. Saturday mails visible on Sunday as "10:30 AM")
+            #   2. Reply threads: a Saturday original mail that got a
+            #      Sunday reply shows today's time in the row — the
+            #      aria-label on the THREAD ROW still says the original
+            #      received date, so we can correctly reject it.
+            if not TEST_MODE and not is_row_from_today(el):
+                print(f"    [{i}] not from today (aria-label date mismatch) — skipped")
+                skipped += 1
+                continue
+            # ─────────────────────────────────────────────────────────
+
             result = process_mail(page, el, text, i)
 
             if result == "stop":
@@ -698,22 +747,6 @@ def run_mail_reader():
                     elif (
                         not TEST_MODE
                         and _report_sent_today != yesterday
-                        and n.weekday() == 6
-                        and yesterday.weekday() == 5
-                        and _mins(n.hour, n.minute) < handover_start_mins()
-                    ):
-                        print(
-                            f"\n{'='*55}\n"
-                            f"WINDOW CLOSED [Saturday missed] [{n.strftime('%H:%M')} IST]"
-                            f" — Sending Saturday report email...\n"
-                            f"{'='*55}"
-                        )
-                        send_report(target_date=yesterday)
-                        _report_sent_today = yesterday
-
-                    elif (
-                        not TEST_MODE
-                        and _report_sent_today != yesterday
                         and n.weekday() == 0
                         and yesterday.weekday() == 6
                         and _mins(n.hour, n.minute) < handover_start_mins()
@@ -753,12 +786,42 @@ def run_mail_reader():
                 page.wait_for_timeout(8000)
 
                 # Scroll to top of inbox before scanning
+                # Try multiple selectors — Outlook's panel class can vary.
+                # Also click the first row first so keyboard Home key works.
+                scrolled = False
+                for sel in [
+                    "div[role='list']",
+                    "div[aria-label='Message list']",
+                    "div.customScrollBar",
+                    "div[data-testid='MailList']",
+                ]:
+                    try:
+                        loc = page.locator(sel).first
+                        if loc.count() > 0:
+                            loc.evaluate("el => el.scrollTo(0, 0)")
+                            page.wait_for_timeout(600)
+                            scrolled = True
+                            break
+                    except:
+                        continue
+
+                # Belt-and-suspenders: click first visible row then Home key
                 try:
-                    panel = page.locator("div[role='list']").first
-                    panel.evaluate("el => el.scrollTo(0, 0)")
-                    page.wait_for_timeout(1000)
+                    first_row = page.locator("div[role='option']").first
+                    if first_row.count() > 0:
+                        first_row.click(timeout=3000)
+                        page.wait_for_timeout(300)
                 except:
                     pass
+                try:
+                    page.keyboard.press("Home")
+                    page.wait_for_timeout(600)
+                except:
+                    pass
+
+                if not scrolled:
+                    print("  Warning: could not confirm scroll-to-top")
+                page.wait_for_timeout(800)
 
                 # Run full scan
                 run_one_scan(page)
