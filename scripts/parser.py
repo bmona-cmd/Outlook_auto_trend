@@ -44,6 +44,11 @@ TEAM_TECH_MAP = {
     "sdwan": "SDWAN"
 }
 
+CUSTOMER_VERTICAL_ALIASES = {
+    "vz": "Telco",
+    "vz ops": "Telco",
+}
+
 # ==========================================
 # STOP WORDS
 # ==========================================
@@ -526,7 +531,11 @@ def _first_word_has_vertical(customer):
 
     first_word = normalized_customer.split()[0]
 
-    return first_word in first_word_vertical_map
+    return (
+        first_word in first_word_vertical_map
+        or first_word in CUSTOMER_VERTICAL_ALIASES
+        or normalized_customer in CUSTOMER_VERTICAL_ALIASES
+    )
 
 
 def _trim_customer_words(words, start_index):
@@ -546,6 +555,8 @@ def _trim_customer_words(words, start_index):
             normalized_word in ["case", "sr", "pr", "p1", "p2", "p3", "p4", "p5"]
             or
             re.match(r'^\d{4}$', normalized_word)
+            or
+            re.match(r'^\d{3,7}$', normalized_word)
             or
             re.match(r'^\d{4}\s+\d{3,5}\s+\d{4,}$', normalized_word)
         ):
@@ -612,6 +623,36 @@ def _extract_customer_candidate(text):
 
         if part.strip()
     ]
+
+    # If a part contains the case number, candidates can be
+    # either BEFORE it ("[Handover] Customer || P2 || CASE || ...")
+    # or AFTER it ("[Handover] -CASE | P2 | Customer | ..."),
+    # depending on the subject layout. Try parts before the
+    # case# first (skipping mail-type/handover tags), then
+    # fall back to parts after it.
+
+    case_idx = None
+    for idx, part in enumerate(parts):
+        if re.search(r'\b\d{4}-\d{3,5}-\d{4,}\b', part):
+            case_idx = idx
+            break
+
+    if case_idx is not None:
+
+        before_parts = []
+        for part in parts[:case_idx]:
+            stripped = re.sub(
+                r'^\[?\s*(handover|dispatch|ho|ho-mw)\s*\]?\s*',
+                '',
+                part,
+                flags=re.IGNORECASE
+            ).strip()
+            if stripped:
+                before_parts.append(stripped)
+
+        after_parts = parts[case_idx + 1:]
+
+        parts = before_parts + after_parts
 
     for part in parts:
 
@@ -708,6 +749,8 @@ def extract_customer(text):
         if (
             customer_clean in cleaned
             and
+            re.search(r'(?:^|\s)' + re.escape(customer_clean) + r'(?:$|\s)', cleaned)
+            and
             len(customer_words) > exact_word_count
         ):
 
@@ -792,6 +835,14 @@ def extract_vertical(customer):
             customer
         )
     )
+
+    if lower_customer in CUSTOMER_VERTICAL_ALIASES:
+        return CUSTOMER_VERTICAL_ALIASES[lower_customer]
+
+    if lower_customer:
+        first_word = lower_customer.split()[0]
+        if first_word in CUSTOMER_VERTICAL_ALIASES:
+            return CUSTOMER_VERTICAL_ALIASES[first_word]
 
     for company in normalized_vertical_map.keys():
 

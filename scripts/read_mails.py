@@ -55,7 +55,7 @@ JUNK = [
 #   - Saturday 03:00 → Saturday 24:00
 #   - Sunday   03:00 → Sunday   24:00
 # ──────────────────────────────────────────
-TEST_MODE       = True
+TEST_MODE       = False
 IST             = timezone(timedelta(hours=5, minutes=30))
 HANDOVER_START  = (3,  0)
 HANDOVER_END    = (24, 0)   # midnight (end of day)
