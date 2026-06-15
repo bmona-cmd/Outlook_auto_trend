@@ -173,6 +173,75 @@
     border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 1px 2px rgba(0,0,0,.04);
   }
+  .chart-page {
+    display: grid;
+    gap: 18px;
+  }
+  .chart-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+  }
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  .chart-card h2 {
+    font-size: 13px; font-weight: 700; margin-bottom: 12px;
+  }
+  .chart-tabs {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px;
+  }
+  .chart-tabs button,
+  .chart-tabs .btn-ghost {
+    height: 48px;
+    line-height: 1.2;
+    min-width: 160px;
+  }
+  .chart-tabs button {
+    border: 1px solid var(--border);
+    background: #ffffff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 12px 24px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    flex-grow: 1;
+    max-width: 200px;
+  }
+  .chart-tabs button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .chart-note {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    min-height: 384px;
+  }
+  .chart-card h2 {
+    font-family: var(--font);
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: var(--black);
+  }
+  .chart-card canvas {
+    width: 100% !important;
+    height: 320px !important;
+  }
   table { width: 100%; border-collapse: collapse; }
   thead th {
     background: var(--soft); color: var(--black);
@@ -215,6 +284,7 @@
     flex-shrink: 0;
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
@@ -233,6 +303,7 @@
   <button onclick="showTab('customers',this)">Customers</button>
   <button onclick="showTab('devices',this)">Devices</button>
   <button onclick="showTab('email',this)">Email</button>
+  <button onclick="showTab('charts',this)">Charts</button>
 </nav>
 
 <main>
@@ -373,6 +444,40 @@
 
   </section>
 
+  <!-- ════════════════════════════════
+       PAGE: CHARTS
+  ════════════════════════════════ -->
+  <section class="page" id="tab-charts">
+
+    <div class="form-card">
+      <div class="ctrl-row" style="align-items:center; gap:12px; flex-wrap:wrap;">
+        <div class="chart-tabs">
+          <button id="chart-weekly" class="btn btn-ghost active" onclick="setChartView('weekly')">Weekly</button>
+          <button id="chart-monthly" class="btn btn-ghost" onclick="setChartView('monthly')">Monthly</button>
+        </div>
+        <button class="btn btn-ghost" onclick="refreshCharts()">↻ Refresh Charts</button>
+        <button class="btn btn-ghost" onclick="addChartsToExcel()">📄 Add Charts to Excel</button>
+      </div>
+      <div id="chart-data-status" class="chart-note">Weekend case trends are shown by vertical, technology, and delivery type. Keep the latest Excel file in <code>output/</code> for accurate data.</div>
+    </div>
+
+    <div class="chart-page">
+      <div class="chart-card">
+        <h2>Cases by Vertical</h2>
+        <canvas id="chart-vertical" height="220"></canvas>
+      </div>
+      <div class="chart-card">
+        <h2>Cases by Technology</h2>
+        <canvas id="chart-technology" height="220"></canvas>
+      </div>
+      <div class="chart-card">
+        <h2>Cases by Delivery Type</h2>
+        <canvas id="chart-delivery" height="220"></canvas>
+      </div>
+    </div>
+
+  </section>
+
 </main>
 
 <!-- FOOTER -->
@@ -391,6 +496,7 @@ function showTab(id, btn) {
   if (id === 'customers') loadCustomers();
   if (id === 'devices')   loadDevices();
   if (id === 'email')     loadEmailRecipients();
+  if (id === 'charts')    loadCharts();
 }
 
 // ── TOAST ──────────────────────────────────────────────────────────────────
@@ -654,6 +760,197 @@ function esc(s) {
 
 function escAttr(s) {
   return esc(s).replace(/'/g,'&#39;');
+}
+
+let currentChartView = 'weekly';
+const chartInstances = {};
+let chartRefreshTimer = null;
+
+if (window.Chart && window.Chart.defaults) {
+  window.Chart.defaults.font.family = getComputedStyle(document.body).fontFamily || 'Arial, sans-serif';
+  window.Chart.defaults.font.size = 13;
+}
+
+function setChartView(view) {
+  if (view === currentChartView) return;
+  currentChartView = view;
+  document.getElementById('chart-weekly').classList.toggle('active', view === 'weekly');
+  document.getElementById('chart-monthly').classList.toggle('active', view === 'monthly');
+  loadCharts();
+}
+
+function startChartRefresh() {
+  if (chartRefreshTimer) return;
+  chartRefreshTimer = setInterval(() => {
+    if (document.getElementById('tab-charts').classList.contains('active')) {
+      loadCharts();
+    }
+  }, 10000);
+}
+
+function refreshCharts() {
+  loadCharts();
+}
+
+window.addEventListener('load', () => {
+  startChartRefresh();
+  if (document.getElementById('tab-charts').classList.contains('active')) {
+    loadCharts();
+  }
+});
+
+async function loadCharts() {
+  const statusNote = document.getElementById('chart-data-status');
+  if (statusNote) {
+    statusNote.textContent = 'Loading chart data…';
+  }
+  try {
+    const r = await fetch('/api/chart_data');
+    const data = await r.json();
+    const series = data[currentChartView] || {};
+
+    if (data.error) {
+      if (statusNote) {
+        statusNote.textContent = `Chart API error: ${data.error}`;
+      }
+      toast(`Chart API error: ${data.error}`, 'err');
+    }
+
+    if (!data.file) {
+      if (statusNote) {
+        statusNote.textContent = 'No weekend Excel file found in output/. Run automation until at least one weekend case is written.';
+      }
+    }
+
+    if (!series.labels || !series.labels.length) {
+      if (statusNote && data.file) {
+        statusNote.textContent = `Weekend data file ${data.file} has no chartable periods yet. Refresh after automation writes more weekend cases.`;
+      }
+      toast('No chart data available yet. Generate or refresh weekend results first.', 'warn');
+    } else {
+      if (statusNote) {
+        statusNote.textContent = `Showing ${series.labels.length} ${currentChartView} period(s) from file ${data.file || 'none'} (${data.total || 0} cases). Refreshes automatically while this tab is active.`;
+      }
+    }
+
+    renderTrendChart('chart-vertical', 'Cases by Vertical', series.vertical || {});
+    renderTrendChart('chart-technology', 'Cases by Technology', series.technology || {});
+    renderTrendChart('chart-delivery', 'Cases by Case Delivery Type', series.delivery_type || {});
+  } catch (err) {
+    toast('Failed to load chart data.', 'err');
+  }
+}
+
+function renderTrendChart(canvasId, title, chartData) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (chartInstances[canvasId]) {
+    chartInstances[canvasId].destroy();
+  }
+
+  const labels = chartData.labels || [];
+  const palette = {
+    'Cable': '#4472C4',
+    'Content': '#ED7D31',
+    'EMEA': '#A9D18E',
+    'Enterprise': '#FFC000',
+    'Telco': '#7030A0',
+    'Routing': '#4472C4',
+    'Switching': '#ED7D31',
+    'Security': '#A9D18E',
+    'Software': '#FFC000',
+    'Dispatch P1': '#C00000',
+    'Dispatch P2': '#ED7D31',
+    'Handover': '#70AD47'
+  };
+  const defaultColors = ['#4472C4', '#ED7D31', '#A9D18E', '#FFC000', '#7030A0', '#70AD47', '#5B9BD5', '#C55A11'];
+  const datasets = Object.entries(chartData.series || {}).map(([label, values], idx) => {
+    const color = palette[label] || defaultColors[idx % defaultColors.length];
+    return {
+      label,
+      data: values || [],
+      borderColor: color,
+      backgroundColor: color + '33',
+      tension: 0.35,
+      fill: false,
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      borderWidth: 3,
+      showLine: true,
+      spanGaps: true,
+      type: 'line'
+    };
+  });
+
+  const chartFont = {
+    family: getComputedStyle(document.body).fontFamily || 'Arial, sans-serif',
+    size: 13,
+  };
+
+  if (!datasets.length) {
+    chartInstances[canvasId] = new Chart(ctx, {
+      type: 'line',
+      data: {labels: [], datasets: []},
+      options: {
+        plugins: {
+          legend: {display: false},
+          title: {display: false, text: title, font: chartFont}
+        },
+        scales: {
+          x: {display: false},
+          y: {display: false}
+        },
+        font: chartFont
+      }
+    });
+    return;
+  }
+
+  chartInstances[canvasId] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      font: chartFont,
+      plugins: {
+        legend: {position: 'bottom', labels: {boxHeight: 10, boxWidth: 10, font: chartFont}},
+        title: {display: false, text: title, font: chartFont},
+        tooltip: {mode: 'index', intersect: false, bodyFont: chartFont, titleFont: chartFont}
+      },
+      interaction: {mode: 'nearest', axis: 'x', intersect: false},
+      scales: {
+        x: {
+          display: true,
+          title: {display: true, text: 'Period'},
+          ticks: {maxRotation: 0, autoSkip: false, maxTicksLimit: 8}
+        },
+        y: {
+          display: true,
+          beginAtZero: true,
+          title: {display: true, text: 'Cases'}
+        }
+      }
+    }
+  });
+}
+
+async function addChartsToExcel() {
+  try {
+    const r = await fetch('/api/add_charts_to_excel', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      toast(d.msg || 'Excel charts added successfully.', 'ok');
+    } else {
+      toast(d.msg || 'Failed to add charts to Excel.', 'err');
+    }
+  } catch (e) {
+    toast('Failed to add charts to Excel.', 'err');
+  }
 }
 </script>
 </body>
