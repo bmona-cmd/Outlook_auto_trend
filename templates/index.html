@@ -317,7 +317,6 @@
       <button class="btn btn-blue"  id="btn-start" onclick="startAuto()">▶ &nbsp;Start</button>
       <button class="btn btn-red"   id="btn-stop"  onclick="stopAuto()" disabled>■ &nbsp;Stop</button>
       <div class="ctrl-sep"></div>
-      <button class="btn btn-ghost" onclick="openExcel()">📂 &nbsp;Open Excel</button>
       <a class="btn btn-ghost" href="/api/download_excel" download>⬇ &nbsp;Download Excel</a>
       <button class="btn btn-green" id="btn-send-email" onclick="sendReportEmail()">✉ &nbsp;Send Email Now</button>
     </div>
@@ -452,16 +451,17 @@
     <div class="form-card">
       <div class="ctrl-row" style="align-items:center; gap:12px; flex-wrap:wrap;">
         <div class="chart-tabs">
-          <button id="chart-weekly" class="btn btn-ghost active" onclick="setChartView('weekly')">Weekly</button>
-          <button id="chart-monthly" class="btn btn-ghost" onclick="setChartView('monthly')">Monthly</button>
+          <button id="chart-weekly"  class="btn btn-ghost active" onclick="setChartView('weekly')">Weekly</button>
+          <button id="chart-monthly" class="btn btn-ghost"        onclick="setChartView('monthly')">Monthly</button>
+          <button id="chart-compare" class="btn btn-ghost"        onclick="setChartView('compare')">📊 Compare Months</button>
         </div>
         <button class="btn btn-ghost" onclick="refreshCharts()">↻ Refresh Charts</button>
-        <button class="btn btn-ghost" onclick="addChartsToExcel()">📄 Add Charts to Excel</button>
       </div>
       <div id="chart-data-status" class="chart-note">Weekend case trends are shown by vertical, technology, and delivery type. Keep the latest Excel file in <code>output/</code> for accurate data.</div>
     </div>
 
-    <div class="chart-page">
+    <!-- Weekly / Monthly charts -->
+    <div class="chart-page" id="charts-standard">
       <div class="chart-card">
         <h2>Cases by Vertical</h2>
         <canvas id="chart-vertical" height="220"></canvas>
@@ -473,6 +473,26 @@
       <div class="chart-card">
         <h2>Cases by Delivery Type</h2>
         <canvas id="chart-delivery" height="220"></canvas>
+      </div>
+    </div>
+
+    <!-- Compare Months charts -->
+    <div class="chart-page" id="charts-compare" style="display:none;">
+      <div class="chart-card" style="grid-column:1/-1;">
+        <h2>Total Cases — Month-over-Month</h2>
+        <canvas id="chart-compare-total" height="220"></canvas>
+      </div>
+      <div class="chart-card">
+        <h2>Vertical — Month-over-Month</h2>
+        <canvas id="chart-compare-vertical" height="220"></canvas>
+      </div>
+      <div class="chart-card">
+        <h2>Technology — Month-over-Month</h2>
+        <canvas id="chart-compare-technology" height="220"></canvas>
+      </div>
+      <div class="chart-card">
+        <h2>Delivery Type — Month-over-Month</h2>
+        <canvas id="chart-compare-delivery" height="220"></canvas>
       </div>
     </div>
 
@@ -619,12 +639,7 @@ async function sendReportEmail() {
   }
 }
 
-function openExcel() {
-  fetch('/api/status').then(r=>r.json()).then(d=>{
-    if (d.latest_file === '—') { toast('No Excel file found yet.','err'); return; }
-    toast('Use Download Excel to save the file, then open it locally.','ok');
-  });
-}
+
 
 // ── CUSTOMERS ─────────────────────────────────────────────────────────────
 async function loadCustomers() {
@@ -774,9 +789,116 @@ if (window.Chart && window.Chart.defaults) {
 function setChartView(view) {
   if (view === currentChartView) return;
   currentChartView = view;
-  document.getElementById('chart-weekly').classList.toggle('active', view === 'weekly');
+  document.getElementById('chart-weekly').classList.toggle('active',  view === 'weekly');
   document.getElementById('chart-monthly').classList.toggle('active', view === 'monthly');
-  loadCharts();
+  document.getElementById('chart-compare').classList.toggle('active', view === 'compare');
+
+  const standard = document.getElementById('charts-standard');
+  const compare  = document.getElementById('charts-compare');
+  if (view === 'compare') {
+    standard.style.display = 'none';
+    compare.style.display  = '';
+    loadCompareCharts();
+  } else {
+    standard.style.display = '';
+    compare.style.display  = 'none';
+    loadCharts();
+  }
+}
+
+async function loadCompareCharts() {
+  const statusNote = document.getElementById('chart-data-status');
+  if (statusNote) statusNote.textContent = 'Loading monthly comparison data…';
+  try {
+    const r    = await fetch('/api/monthly_compare');
+    const data = await r.json();
+
+    if (data.error) {
+      if (statusNote) statusNote.textContent = `Compare error: ${data.error}`;
+      toast(`Compare error: ${data.error}`, 'err');
+      return;
+    }
+    if (!data.months || !data.months.length) {
+      if (statusNote) statusNote.textContent = 'Not enough data yet — run the automation for at least one month to see comparisons.';
+      return;
+    }
+
+    if (statusNote) statusNote.textContent = `Comparing ${data.months.length} month(s): ${data.months.join(', ')}.`;
+
+    const months  = data.months;
+    const palette = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#70AD47','#5B9BD5','#C55A11'];
+
+    // ── Total cases per month (single bar dataset) ──────────────────────────
+    renderCompareBar('chart-compare-total', months, [{
+      label: 'Total Cases',
+      data:  data.totals,
+      backgroundColor: months.map((_,i) => palette[i % palette.length]),
+      borderRadius: 6,
+    }], 'Total Cases per Month');
+
+    // ── Vertical breakdown ───────────────────────────────────────────────────
+    renderCompareBar(
+      'chart-compare-vertical', months,
+      buildCompareSeries(data.vertical, months, palette),
+      'Cases by Vertical per Month'
+    );
+
+    // ── Technology breakdown ─────────────────────────────────────────────────
+    renderCompareBar(
+      'chart-compare-technology', months,
+      buildCompareSeries(data.technology, months, palette),
+      'Cases by Technology per Month'
+    );
+
+    // ── Delivery type breakdown ──────────────────────────────────────────────
+    renderCompareBar(
+      'chart-compare-delivery', months,
+      buildCompareSeries(data.delivery_type, months, palette),
+      'Cases by Delivery Type per Month'
+    );
+
+  } catch (e) {
+    toast('Failed to load comparison data.', 'err');
+  }
+}
+
+function buildCompareSeries(categoryData, months, palette) {
+  // categoryData: { "Cable": [3,5,2], "Content": [1,2,4], ... }
+  return Object.entries(categoryData || {}).map(([cat, values], idx) => ({
+    label: cat,
+    data: values,
+    backgroundColor: (palette[idx % palette.length]) + 'CC',
+    borderColor:     palette[idx % palette.length],
+    borderWidth: 1,
+    borderRadius: 4,
+  }));
+}
+
+function renderCompareBar(canvasId, labels, datasets, title) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
+
+  const font = { family: getComputedStyle(document.body).fontFamily || 'Arial, sans-serif', size: 13 };
+
+  chartInstances[canvasId] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { boxHeight: 10, boxWidth: 10, font } },
+        title:  { display: false, text: title },
+        tooltip:{ mode: 'index', intersect: false }
+      },
+      scales: {
+        x: { stacked: false, ticks: { font } },
+        y: { beginAtZero: true, stacked: false, title: { display: true, text: 'Cases' }, ticks: { font } }
+      }
+    }
+  });
 }
 
 function startChartRefresh() {
@@ -833,15 +955,15 @@ async function loadCharts() {
       }
     }
 
-    renderTrendChart('chart-vertical', 'Cases by Vertical', series.vertical || {});
-    renderTrendChart('chart-technology', 'Cases by Technology', series.technology || {});
-    renderTrendChart('chart-delivery', 'Cases by Case Delivery Type', series.delivery_type || {});
+    renderTrendChart('chart-vertical',  'Cases by Vertical',           series.vertical      || {}, series.date_ranges || {});
+    renderTrendChart('chart-technology','Cases by Technology',          series.technology    || {}, series.date_ranges || {});
+    renderTrendChart('chart-delivery',  'Cases by Case Delivery Type',  series.delivery_type || {}, series.date_ranges || {});
   } catch (err) {
     toast('Failed to load chart data.', 'err');
   }
 }
 
-function renderTrendChart(canvasId, title, chartData) {
+function renderTrendChart(canvasId, title, chartData, dateRanges) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -853,7 +975,7 @@ function renderTrendChart(canvasId, title, chartData) {
   const palette = {
     'Cable': '#4472C4',
     'Content': '#ED7D31',
-    'EMEA': '#A9D18E',
+    'Emea': '#A9D18E',
     'Enterprise': '#FFC000',
     'Telco': '#7030A0',
     'Routing': '#4472C4',
@@ -861,7 +983,9 @@ function renderTrendChart(canvasId, title, chartData) {
     'Security': '#A9D18E',
     'Software': '#FFC000',
     'Dispatch P1': '#C00000',
+    'New Dispatch P1': '#C00000',
     'Dispatch P2': '#ED7D31',
+    'New Dispatch P2': '#F4A261',
     'Handover': '#70AD47'
   };
   const defaultColors = ['#4472C4', '#ED7D31', '#A9D18E', '#FFC000', '#7030A0', '#70AD47', '#5B9BD5', '#C55A11'];
@@ -909,10 +1033,7 @@ function renderTrendChart(canvasId, title, chartData) {
 
   chartInstances[canvasId] = new Chart(ctx, {
     type: 'line',
-    data: {
-      labels,
-      datasets
-    },
+    data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -920,7 +1041,18 @@ function renderTrendChart(canvasId, title, chartData) {
       plugins: {
         legend: {position: 'bottom', labels: {boxHeight: 10, boxWidth: 10, font: chartFont}},
         title: {display: false, text: title, font: chartFont},
-        tooltip: {mode: 'index', intersect: false, bodyFont: chartFont, titleFont: chartFont}
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          bodyFont: chartFont,
+          titleFont: {...chartFont, weight: 'bold'},
+          callbacks: {
+            title: function(items) {
+              const raw = items[0]?.label || '';
+              return (dateRanges && dateRanges[raw]) ? dateRanges[raw] : raw;
+            }
+          }
+        }
       },
       interaction: {mode: 'nearest', axis: 'x', intersect: false},
       scales: {
@@ -939,19 +1071,7 @@ function renderTrendChart(canvasId, title, chartData) {
   });
 }
 
-async function addChartsToExcel() {
-  try {
-    const r = await fetch('/api/add_charts_to_excel', {method:'POST'});
-    const d = await r.json();
-    if (d.ok) {
-      toast(d.msg || 'Excel charts added successfully.', 'ok');
-    } else {
-      toast(d.msg || 'Failed to add charts to Excel.', 'err');
-    }
-  } catch (e) {
-    toast('Failed to add charts to Excel.', 'err');
-  }
-}
+
 </script>
 </body>
 </html>
