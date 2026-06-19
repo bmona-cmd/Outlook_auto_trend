@@ -383,7 +383,7 @@ def api_chart_data():
     try:
         DEFAULT_VERTICAL   = ["EMEA","Cable","Content","Enterprise","Telco","Software"]
         DEFAULT_TECHNOLOGY = ["Routing","Switching","Security","Software"]
-        DEFAULT_DELIVERY   = ["Dispatch P1","Dispatch P2","Handover","New Dispatch P1","New Dispatch P2"]
+        DEFAULT_DELIVERY   = ["Dispatch P1","Dispatch P2","Handover"]
 
         # ── Mac-safe date parser ─────────────────────────────────────────────
         # Handles: datetime objects, '2-May-26', '02-May-26', '2-May-2026', ISO
@@ -430,6 +430,7 @@ def api_chart_data():
         ACRONYMS = {"Emea": "EMEA", "Cfts": "CFTS", "Bngl": "BNGL"}
         ALIASES_LOWER = {
             "entfin":            "Enterprise",
+            "cloud":             "Software",
             "new dispatch p1":   "Dispatch P1",
             "new dispatch p2":   "Dispatch P2",
             "handover in":       "Handover",
@@ -437,7 +438,9 @@ def api_chart_data():
         }
 
         def fix_case(val):
-            raw = str(val).strip()
+            raw = str(val).replace('\xa0', '').strip()
+            if not raw or raw.lower() in ("nan", "none", "nat"):
+                return ""
             normalized = " ".join(raw.lower().split())
             alias = ALIASES_LOWER.get(normalized)
             if alias:
@@ -721,6 +724,7 @@ def api_monthly_compare():
 
         ALIASES_LOWER = {
             "entfin":            "Enterprise",
+            "cloud":             "Software",
             "new dispatch p1":   "Dispatch P1",
             "new dispatch p2":   "Dispatch P2",
             "new dispatch  p1":  "Dispatch P1",

@@ -973,20 +973,22 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
 
   const labels = chartData.labels || [];
   const palette = {
-    'Cable': '#4472C4',
-    'Content': '#ED7D31',
-    'Emea': '#A9D18E',
+    // Verticals
+    'Cable':      '#4472C4',
+    'Content':    '#FF0000',
+    'EMEA':       '#70AD47',
+    'Emea':       '#70AD47',
     'Enterprise': '#FFC000',
-    'Telco': '#7030A0',
-    'Routing': '#4472C4',
-    'Switching': '#ED7D31',
-    'Security': '#A9D18E',
-    'Software': '#FFC000',
-    'Dispatch P1': '#C00000',
-    'New Dispatch P1': '#C00000',
-    'Dispatch P2': '#ED7D31',
-    'New Dispatch P2': '#F4A261',
-    'Handover': '#70AD47'
+    'Software':   '#5B9BD5',
+    'Telco':      '#7030A0',
+    // Technologies
+    'Routing':    '#4472C4',
+    'Switching':  '#ED7D31',
+    'Security':   '#70AD47',
+    // Delivery types
+    'Dispatch P1':  '#C00000',
+    'Dispatch P2':  '#ED7D31',
+    'Handover':     '#70AD47',
   };
   const defaultColors = ['#4472C4', '#ED7D31', '#A9D18E', '#FFC000', '#7030A0', '#70AD47', '#5B9BD5', '#C55A11'];
   const datasets = Object.entries(chartData.series || {}).map(([label, values], idx) => {
