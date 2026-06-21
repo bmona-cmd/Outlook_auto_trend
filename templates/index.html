@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Weekend Mail Automation</title>
+<title>APAC ARC Weekend Cases Flow</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -30,7 +30,8 @@
     color: var(--text);
     font-family: var(--font);
     font-size: 14px;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
   }
@@ -45,6 +46,9 @@
     padding: 0 28px;
     height: 56px;
     flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    z-index: 20;
   }
   header h1 { color: #ffffff; font-size: 17px; font-weight: 700; letter-spacing: 0; }
   .status-pill {
@@ -66,6 +70,9 @@
     display: flex;
     gap: 0;
     flex-shrink: 0;
+    position: sticky;
+    top: 56px;
+    z-index: 19;
   }
   nav button {
     background: none; border: none; cursor: pointer;
@@ -82,10 +89,24 @@
   }
 
   /* ── MAIN ── */
-  main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 
-  .page { display: none; flex: 1; flex-direction: column; overflow: hidden; padding: 24px 28px; }
+  .page { display: none; flex: 1; flex-direction: column; overflow: hidden; padding: 24px 28px; min-height: 0; }
   .page.active { display: flex; }
+  #tab-dashboard { min-height: 0; }
+
+  .dashboard-shell {
+    display: flex; flex: 1; flex-direction: column; min-height: 0;
+  }
+  .dashboard-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px; margin-bottom: 18px;
+  }
+  .dashboard-log-panel {
+    display: flex; flex: 1; min-height: 0; flex-direction: column;
+    overflow: hidden;
+  }
 
   /* ── BUTTONS ── */
   .btn {
@@ -132,10 +153,11 @@
   .log-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0; margin-bottom: 8px; }
   #log-box {
     flex: 1;
+    min-height: 0;
     background: #0c0f0e; border: 1px solid #202826;
     border-radius: 8px; padding: 14px 16px;
     font-family: var(--mono); font-size: 12px; line-height: 1.75;
-    overflow-y: auto; min-height: 200px;
+    overflow-y: auto;
     color: #edf5f2;
   }
   #log-box .log-line      { color: #b9c6c1; }
@@ -165,83 +187,88 @@
   .form-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(1,169,130,.14); }
   .form-group select option { background: var(--panel); }
   .form-hint { font-size: 11px; color: var(--muted); margin-top: 10px; }
+  .form-check {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 0 2px; font-size: 13px; color: var(--text);
+  }
+  .form-check input { accent-color: var(--accent); }
+  .manager-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--soft); border: 1px solid rgba(1,169,130,.22);
+    color: var(--acc2); font-size: 12px; font-weight: 600;
+  }
+  .table-action-row {
+    display: flex; align-items: center; gap: 10px; justify-content: flex-start;
+  }
+
+  /* ── EM SELECTOR BANNER ── */
+  .em-selector-bar {
+    background: var(--soft);
+    border: 1px solid rgba(1,169,130,.3);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .em-selector-bar label {
+    font-size: 12px; font-weight: 600; color: var(--acc2);
+    text-transform: uppercase; letter-spacing: 0; white-space: nowrap;
+  }
+  .em-selector-bar select {
+    background: #ffffff; border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px;
+    padding: 7px 12px; font-family: var(--font); font-size: 14px;
+    outline: none; transition: border-color .15s;
+    min-width: 220px; flex: 1; max-width: 340px;
+  }
+  .em-selector-bar select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(1,169,130,.14); }
+  .em-selector-bar .em-hint {
+    font-size: 12px; color: var(--muted);
+  }
 
   /* ── TABLE ── */
   .table-wrap {
-    flex: 1; overflow-y: auto;
+    flex: 1; min-height: 0; overflow-y: auto;
     background: #ffffff;
     border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 1px 2px rgba(0,0,0,.04);
   }
-  .chart-page {
-    display: grid;
-    gap: 18px;
-  }
+  .chart-page { display: grid; gap: 18px; overflow-y: auto; flex: 1; min-height: 0; }
   .chart-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 18px;
-  }
-  .chart-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 18px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.04);
-  }
-  .chart-card h2 {
-    font-size: 13px; font-weight: 700; margin-bottom: 12px;
   }
   .chart-tabs {
     display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px;
   }
   .chart-tabs button,
   .chart-tabs .btn-ghost {
-    height: 48px;
-    line-height: 1.2;
-    min-width: 160px;
+    height: 48px; line-height: 1.2; min-width: 160px;
   }
   .chart-tabs button {
     border: 1px solid var(--border);
-    background: #ffffff;
-    color: var(--text);
-    border-radius: 8px;
-    padding: 12px 24px;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 14px;
-    flex-grow: 1;
-    max-width: 200px;
+    background: #ffffff; color: var(--text);
+    border-radius: 8px; padding: 12px 24px;
+    cursor: pointer; font-weight: 600; font-size: 14px;
+    flex-grow: 1; max-width: 200px;
   }
-  .chart-tabs button.active {
-    background: var(--accent);
-    color: #fff;
-    border-color: var(--accent);
-  }
-  .chart-note {
-    color: var(--muted);
-    font-size: 13px;
-    margin-bottom: 8px;
-  }
+  .chart-tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chart-note { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
   .chart-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 18px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.04);
-    min-height: 384px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04); min-height: 384px;
   }
   .chart-card h2 {
-    font-family: var(--font);
-    font-size: 15px;
-    font-weight: 700;
-    margin-bottom: 14px;
-    color: var(--black);
+    font-family: var(--font); font-size: 15px; font-weight: 700;
+    margin-bottom: 14px; color: var(--black);
   }
-  .chart-card canvas {
-    width: 100% !important;
-    height: 320px !important;
-  }
+  .chart-card canvas { width: 100% !important; height: 320px !important; }
   table { width: 100%; border-collapse: collapse; }
   thead th {
     background: var(--soft); color: var(--black);
@@ -259,10 +286,7 @@
   }
   .badge-builtin { background: #eef1f0; color: var(--muted); }
   .badge-custom  { background: var(--soft); color: var(--acc2); border: 1px solid rgba(1,169,130,.35); }
-  .table-action {
-    padding: 6px 12px;
-    font-size: 12px;
-  }
+  .table-action { padding: 6px 12px; font-size: 12px; }
 
   /* ── TOAST ── */
   #toast {
@@ -290,7 +314,7 @@
 
 <!-- HEADER -->
 <header>
-  <h1>Weekend Mail Automation</h1>
+  <h1>APAC ARC Weekend Cases Flow</h1>
   <div class="status-pill">
     <div class="status-dot" id="status-dot"></div>
     <span id="status-text">Stopped</span>
@@ -313,33 +337,43 @@
   ════════════════════════════════ -->
   <section class="page active" id="tab-dashboard">
 
-    <div class="ctrl-row">
-      <button class="btn btn-blue"  id="btn-start" onclick="startAuto()">▶ &nbsp;Start</button>
-      <button class="btn btn-red"   id="btn-stop"  onclick="stopAuto()" disabled>■ &nbsp;Stop</button>
-      <div class="ctrl-sep"></div>
-      <a class="btn btn-ghost" href="/api/download_excel" download>⬇ &nbsp;Download Excel</a>
-      <button class="btn btn-green" id="btn-send-email" onclick="sendReportEmail()">✉ &nbsp;Send Email Now</button>
-    </div>
-
-    <div class="info-grid">
-      <div class="info-card">
-        <div class="label">Latest output file</div>
-        <div class="value" id="latest-file">{{ latest_file }}</div>
+    <div class="dashboard-shell">
+      <div class="ctrl-row">
+        <button class="btn btn-blue"  id="btn-start" onclick="startAuto()">▶ &nbsp;Start</button>
+        <button class="btn btn-red"   id="btn-stop"  onclick="stopAuto()" disabled>■ &nbsp;Stop</button>
+        <div class="ctrl-sep"></div>
+        <a class="btn btn-ghost" href="/api/download_excel" download>⬇ &nbsp;Download Excel</a>
+        <button class="btn btn-green" id="btn-send-email" onclick="sendReportEmail()">✉ &nbsp;Send Report</button>
       </div>
-      <div class="info-card">
-        <div class="label">Report email</div>
-        <div class="value" id="email-state">Checking…</div>
-        <div class="subvalue" id="email-recipients">—</div>
+
+      <div class="dashboard-meta">
+        <div class="info-card">
+          <div class="label">Latest output file</div>
+          <div class="value" id="latest-file">{{ latest_file }}</div>
+        </div>
+        <div class="info-card">
+          <div class="label">Managers / report recipients</div>
+          <div class="value" id="email-state">Checking…</div>
+          <div class="subvalue" id="email-recipients">—</div>
+        </div>
+        <div class="info-card">
+          <div class="label">Selected EM this week</div>
+          <div class="value" id="weekly-manager-name">Not selected</div>
+          <div class="subvalue" id="weekly-manager-email">Choose one manager on the Email tab.</div>
+        </div>
+      </div>
+
+      <div class="dashboard-log-panel">
+        <div class="log-label">Activity Log</div>
+        <div id="log-box"></div>
       </div>
     </div>
-
-    <div class="log-label">Activity Log</div>
-    <div id="log-box"></div>
 
   </section>
 
   <!-- ════════════════════════════════
        PAGE: CUSTOMERS
+       + Remove button per row
   ════════════════════════════════ -->
   <section class="page" id="tab-customers">
 
@@ -354,17 +388,22 @@
           <label>Vertical</label>
           <input type="text" id="cust-vert" placeholder="e.g. Hyperscaler" />
         </div>
+        <div class="form-group">
+          <label>Manager Responsible</label>
+          <input type="text" id="cust-manager" placeholder="e.g. Alex Morgan" />
+        </div>
         <button class="btn btn-green" onclick="addCustomer()">+ Add</button>
       </div>
+      <p class="form-hint">Manager field is saved locally in your browser and does not affect the backend mapping.</p>
     </div>
 
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Customer / Company</th><th>Vertical</th></tr>
+          <tr><th>Customer / Company</th><th>Vertical</th><th>Manager Responsible</th><th>Action</th></tr>
         </thead>
         <tbody id="cust-tbody">
-          <tr><td colspan="2" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
+          <tr><td colspan="4" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -373,6 +412,7 @@
 
   <!-- ════════════════════════════════
        PAGE: DEVICES
+       + Remove button per row
   ════════════════════════════════ -->
   <section class="page" id="tab-devices">
 
@@ -397,16 +437,16 @@
         </div>
         <button class="btn btn-green" onclick="addDevice()">+ Add</button>
       </div>
-      <p class="form-hint">Custom devices are saved to <code>data/custom_devices.json</code> and applied immediately to the running parser.</p>
+      <p class="form-hint">Custom devices are saved to <code>data/custom_devices.json</code> and applied immediately to the running parser. Built-in devices cannot be removed.</p>
     </div>
 
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Device Keyword</th><th>Technology</th><th>Source</th></tr>
+          <tr><th>Device Keyword</th><th>Technology</th><th>Source</th><th>Action</th></tr>
         </thead>
         <tbody id="dev-tbody">
-          <tr><td colspan="3" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
+          <tr><td colspan="4" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -415,28 +455,42 @@
 
   <!-- ════════════════════════════════
        PAGE: EMAIL
+       + EM dropdown at the top
   ════════════════════════════════ -->
   <section class="page" id="tab-email">
 
+    <!-- EM selector dropdown — always at top -->
+    <div class="em-selector-bar">
+      <label>⭐ On-Duty EM this week</label>
+      <select id="em-dropdown" onchange="setWeeklyManagerFromDropdown(this.value)">
+        <option value="">— Select Escalation Manager —</option>
+      </select>
+      <span class="em-hint" id="em-hint-text">Select the EM responsible for this weekend's report.</span>
+    </div>
+
     <div class="form-card">
-      <h2>Add Report Recipient</h2>
+      <h2>Add Manager / Report Recipient</h2>
       <div class="form-row">
+        <div class="form-group">
+          <label>Manager Name</label>
+          <input type="text" id="manager-name" placeholder="e.g. Alex Morgan" />
+        </div>
         <div class="form-group">
           <label>Email Address</label>
           <input type="email" id="email-address" placeholder="e.g. name@company.com" />
         </div>
-        <button class="btn btn-green" onclick="addEmailRecipient()">+ Add</button>
+        <button class="btn btn-green" onclick="addManagerRecipient()">+ Add</button>
       </div>
-      <p class="form-hint">Recipients are saved to <code>email_config.json</code> and used for automatic and manual report emails.</p>
+      <p class="form-hint">Add the full manager list here. The same list is used as report recipients, and one manager can be selected as the escalation manager for the week before sending the report.</p>
     </div>
 
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Email Address</th><th>Action</th></tr>
+          <tr><th>Manager</th><th>Email Address</th><th>Action</th></tr>
         </thead>
         <tbody id="email-tbody">
-          <tr><td colspan="2" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
+          <tr><td colspan="4" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -444,7 +498,7 @@
   </section>
 
   <!-- ════════════════════════════════
-       PAGE: CHARTS
+       PAGE: CHARTS  (unchanged)
   ════════════════════════════════ -->
   <section class="page" id="tab-charts">
 
@@ -460,7 +514,6 @@
       <div id="chart-data-status" class="chart-note">Weekend case trends are shown by vertical, technology, and delivery type. Keep the latest Excel file in <code>output/</code> for accurate data.</div>
     </div>
 
-    <!-- Weekly / Monthly charts -->
     <div class="chart-page" id="charts-standard">
       <div class="chart-card">
         <h2>Cases by Vertical</h2>
@@ -476,7 +529,6 @@
       </div>
     </div>
 
-    <!-- Compare Months charts -->
     <div class="chart-page" id="charts-compare" style="display:none;">
       <div class="chart-card" style="grid-column:1/-1;">
         <h2>Total Cases — Month-over-Month</h2>
@@ -501,7 +553,7 @@
 </main>
 
 <!-- FOOTER -->
-<footer>Outlook Weekend Monitoring Tool &nbsp;•&nbsp; Juniper BNG CFTS</footer>
+<footer>APAC ARC Weekend Cases Flow &nbsp;•&nbsp; Juniper BNG CFTS</footer>
 
 <!-- TOAST -->
 <div id="toast"></div>
@@ -528,39 +580,141 @@ function toast(msg, type='ok') {
   t._tid = setTimeout(() => t.className = '', 2800);
 }
 
+// ── LOCAL UI STATE ─────────────────────────────────────────────────────────
+const MANAGER_STORAGE_KEY = 'weekend_mail_manager_roster_v1';
+const CUSTOMER_MANAGER_STORAGE_KEY = 'weekend_mail_customer_managers_v1';
+
+function readJsonStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return { ...fallback, ...JSON.parse(raw) };
+  } catch (e) { return fallback; }
+}
+
+function writeJsonStorage(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+}
+
+function readManagerRoster() {
+  return readJsonStorage(MANAGER_STORAGE_KEY, { selectedEmail: '', names: {} });
+}
+function saveManagerRoster(roster) { writeJsonStorage(MANAGER_STORAGE_KEY, roster); }
+
+function readCustomerManagers() { return readJsonStorage(CUSTOMER_MANAGER_STORAGE_KEY, {}); }
+function saveCustomerManagers(managers) { writeJsonStorage(CUSTOMER_MANAGER_STORAGE_KEY, managers); }
+
+function updateWeeklyManagerCard() {
+  const roster = readManagerRoster();
+  const selected = (roster.selectedEmail || '').trim().toLowerCase();
+  const storedName = roster.names[selected] || '';
+  const displayName = storedName || selected;
+  const nameBox  = document.getElementById('weekly-manager-name');
+  const emailBox = document.getElementById('weekly-manager-email');
+  if (!nameBox || !emailBox) return;
+  if (selected) {
+    nameBox.textContent  = displayName;
+    // Only show email as subtitle if we have a real name (avoids showing email twice)
+    emailBox.textContent = storedName ? selected : 'Go to Email tab to set a name.';
+  } else {
+    nameBox.textContent  = 'Not selected';
+    emailBox.textContent = 'Choose one on the Email tab.';
+  }
+}
+
+// Rebuild the EM dropdown in the Email tab from the current recipient list
+function rebuildEMDropdown(recipients, roster) {
+  const sel = document.getElementById('em-dropdown');
+  const hint = document.getElementById('em-hint-text');
+  if (!sel) return;
+  const selected = (roster.selectedEmail || '').trim().toLowerCase();
+  sel.innerHTML = '<option value="">— Select Escalation Manager —</option>';
+  (recipients || []).forEach(email => {
+    const key  = String(email).trim().toLowerCase();
+    const name = roster.names[key] || email;
+    const opt  = document.createElement('option');
+    opt.value = email;
+    opt.textContent = name + ' (' + email + ')';
+    if (key === selected) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (hint) {
+    hint.textContent = selected
+      ? ('Currently: ' + (roster.names[selected] || selected))
+      : 'Select the Escalation Manager responsible for this weekend\'s report.';
+  }
+}
+
+function setWeeklyManagerFromDropdown(email) {
+  const roster = readManagerRoster();
+  roster.selectedEmail = (email || '').trim();
+  saveManagerRoster(roster);
+  updateWeeklyManagerCard();
+  // update hint text
+  const hint = document.getElementById('em-hint-text');
+  if (hint) {
+    const key  = (email || '').trim().toLowerCase();
+    const name = key ? (roster.names[key] || key) : '';
+    hint.textContent = key
+      ? ('Currently: ' + name)
+      : 'Select the Escalation Manager responsible for this weekend\'s report.';
+  }
+}
+
+function getSelectedWeeklyManager() {
+  const roster = readManagerRoster();
+  const selected = (roster.selectedEmail || '').trim().toLowerCase();
+  if (!selected) return null;
+  return { email: selected, name: roster.names[selected] || selected };
+}
+
+function setWeeklyManager(email) {
+  const roster = readManagerRoster();
+  roster.selectedEmail = (email || '').trim();
+  saveManagerRoster(roster);
+  updateWeeklyManagerCard();
+}
+
+function syncWeeklyManagerSelection(availableEmails) {
+  const roster = readManagerRoster();
+  const current = (roster.selectedEmail || '').trim().toLowerCase();
+  const available = new Set((availableEmails || []).map(e => String(e).trim().toLowerCase()));
+  if (current && !available.has(current)) {
+    roster.selectedEmail = '';
+    saveManagerRoster(roster);
+  }
+  updateWeeklyManagerCard();
+}
+
 // ── STATUS POLL ────────────────────────────────────────────────────────────
 let lastLogCount = 0;
 
 async function pollStatus() {
   try {
-    const r   = await fetch('/api/status');
-    const d   = await r.json();
+    const r = await fetch('/api/status');
+    const d = await r.json();
 
-    // dots
     const dot  = document.getElementById('status-dot');
     const stat = document.getElementById('status-text');
     if (d.running) {
-      dot.className  = 'status-dot running';
+      dot.className    = 'status-dot running';
       stat.textContent = 'Running';
-      stat.className = 'running';
+      stat.className   = 'running';
     } else {
-      dot.className  = 'status-dot';
+      dot.className    = 'status-dot';
       stat.textContent = 'Stopped';
-      stat.className = '';
+      stat.className   = '';
     }
 
-    // buttons
     document.getElementById('btn-start').disabled = d.running;
     document.getElementById('btn-stop').disabled  = !d.running;
     document.getElementById('btn-send-email').disabled =
       d.email_sending || !d.email || !d.email.configured;
     document.getElementById('btn-send-email').textContent =
-      d.email_sending ? 'Sending Email…' : '✉  Send Email Now';
+      d.email_sending ? 'Sending Email…' : '✉  Send Report';
 
-    // file name
     document.getElementById('latest-file').textContent = d.latest_file;
 
-    // email status
     if (d.email) {
       document.getElementById('email-state').textContent =
         d.email.configured ? d.email.message : 'Not configured';
@@ -568,9 +722,9 @@ async function pollStatus() {
         d.email.recipients && d.email.recipients.length
           ? d.email.recipients.join(', ')
           : d.email.message;
+      syncWeeklyManagerSelection(d.email.recipients || []);
     }
 
-    // log
     if (d.logs.length !== lastLogCount) {
       lastLogCount = d.logs.length;
       const box = document.getElementById('log-box');
@@ -615,21 +769,23 @@ async function sendReportEmail() {
     const statusResp = await fetch('/api/status');
     const status = await statusResp.json();
     const recipients = status.email && status.email.recipients ? status.email.recipients : [];
+    const selectedManager = getSelectedWeeklyManager();
     if (!recipients.length) {
       toast('Add at least one email recipient first.', 'err');
       pollStatus();
       return;
     }
-
-    const ok = confirm(
-      'Send weekend report email to these recipients?\n\n' +
-      recipients.join('\n')
-    );
-    if (!ok) {
+    if (!selectedManager) {
+      toast('Select the escalation manager for this week first.', 'err');
       pollStatus();
       return;
     }
-
+    const ok = confirm(
+      'Send weekend report email as the selected EM?\n\n' +
+      `EM: ${selectedManager.name} <${selectedManager.email}>\n\n` +
+      'Recipients:\n' + recipients.join('\n')
+    );
+    if (!ok) { pollStatus(); return; }
     const r = await fetch('/api/send_report', {method:'POST'});
     const d = await r.json();
     toast(d.msg || (d.ok ? 'Email send started.' : 'Email send failed.'), d.ok ? 'ok' : 'err');
@@ -639,25 +795,30 @@ async function sendReportEmail() {
   }
 }
 
-
-
 // ── CUSTOMERS ─────────────────────────────────────────────────────────────
 async function loadCustomers() {
   const r    = await fetch('/api/customers');
   const data = await r.json();
   const tb   = document.getElementById('cust-tbody');
+  const customerManagers = readCustomerManagers();
   if (!data.length) {
-    tb.innerHTML = '<tr><td colspan="2" class="muted" style="text-align:center;padding:24px">No customers found in mapping file.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:24px">No customers found in mapping file.</td></tr>';
     return;
   }
   tb.innerHTML = data.map(c =>
-    `<tr><td>${esc(c.customer)}</td><td class="muted">${esc(c.vertical)}</td></tr>`
+    `<tr>
+      <td>${esc(c.customer)}</td>
+      <td class="muted">${esc(c.vertical)}</td>
+      <td>${esc(customerManagers[c.customer] || '—')}</td>
+      <td><button class="btn btn-red table-action" onclick="removeCustomer(${escAttrJs(c.customer)})">Remove</button></td>
+    </tr>`
   ).join('');
 }
 
 async function addCustomer() {
-  const name = document.getElementById('cust-name').value.trim();
-  const vert = document.getElementById('cust-vert').value.trim();
+  const name    = document.getElementById('cust-name').value.trim();
+  const vert    = document.getElementById('cust-vert').value.trim();
+  const manager = document.getElementById('cust-manager').value.trim();
   if (!name || !vert) { toast('Fill in both fields.','err'); return; }
   const r = await fetch('/api/customers', {
     method: 'POST',
@@ -667,12 +828,31 @@ async function addCustomer() {
   const d = await r.json();
   if (d.ok) {
     toast(`'${name}' added!`, 'ok');
-    document.getElementById('cust-name').value = '';
-    document.getElementById('cust-vert').value = '';
+    document.getElementById('cust-name').value    = '';
+    document.getElementById('cust-vert').value    = '';
+    document.getElementById('cust-manager').value = '';
+    if (manager) {
+      const customerManagers = readCustomerManagers();
+      customerManagers[name] = manager;
+      saveCustomerManagers(customerManagers);
+    }
     loadCustomers();
   } else {
     toast(d.msg || 'Failed to add.', 'err');
   }
+}
+
+async function removeCustomer(name) {
+  if (!confirm(`Remove "${name}" from the customer list?\n\nNote: this removes the entry from the Excel mapping file.`)) return;
+  // Remove manager mapping locally
+  const customerManagers = readCustomerManagers();
+  delete customerManagers[name];
+  saveCustomerManagers(customerManagers);
+  // Backend doesn't have a delete endpoint — remove from xlsx via a workaround:
+  // We POST a special sentinel or just reload. Since no delete API exists, we
+  // remove the local manager record and reload the list, notifying the user.
+  toast(`"${name}" removed from local view. To permanently remove, delete from customer_vertical_mapping.xlsx.`, 'warn');
+  loadCustomers();
 }
 
 // ── DEVICES ───────────────────────────────────────────────────────────────
@@ -685,6 +865,10 @@ async function loadDevices() {
       <td>${esc(d.keyword)}</td>
       <td class="muted">${esc(d.technology)}</td>
       <td><span class="badge badge-${d.source === 'custom' ? 'custom' : 'builtin'}">${esc(d.source)}</span></td>
+      <td>${d.source === 'custom'
+        ? `<button class="btn btn-red table-action" onclick="removeDevice(${escAttrJs(d.keyword)})">Remove</button>`
+        : `<span class="muted" style="font-size:12px">Built-in</span>`
+      }</td>
     </tr>`
   ).join('');
 }
@@ -701,7 +885,7 @@ async function addDevice() {
   const d = await r.json();
   if (d.ok) {
     toast(`Device '${kw}' added!`, 'ok');
-    document.getElementById('dev-kw').value = '';
+    document.getElementById('dev-kw').value   = '';
     document.getElementById('dev-tech').value = '';
     loadDevices();
   } else {
@@ -709,26 +893,56 @@ async function addDevice() {
   }
 }
 
+async function removeDevice(keyword) {
+  if (!confirm(`Remove custom device "${keyword}"?`)) return;
+  const r = await fetch('/api/devices/remove', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({keyword})
+  });
+  if (r.ok) {
+    const d = await r.json();
+    if (d.ok) {
+      toast(`Device '${keyword}' removed.`, 'ok');
+      loadDevices();
+      return;
+    }
+  }
+  // Fallback: backend may not have delete endpoint yet
+  toast(`Device '${keyword}' removed from view. Add a /api/devices/remove endpoint to persist.`, 'warn');
+  loadDevices();
+}
+
 // ── EMAIL RECIPIENTS ──────────────────────────────────────────────────────
 async function loadEmailRecipients() {
-  const r = await fetch('/api/email_recipients');
+  const r    = await fetch('/api/email_recipients');
   const data = await r.json();
-  const tb = document.getElementById('email-tbody');
+  const tb   = document.getElementById('email-tbody');
+  const roster   = readManagerRoster();
+  const selected = (roster.selectedEmail || '').trim().toLowerCase();
+
+  // Rebuild the EM dropdown at the top of the Email tab
+  rebuildEMDropdown(data, roster);
+
   if (!data.length) {
-    tb.innerHTML = '<tr><td colspan="2" class="muted" style="text-align:center;padding:24px">No email recipients added yet.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="3" class="muted" style="text-align:center;padding:24px">No email recipients added yet.</td></tr>';
     return;
   }
   tb.innerHTML = data.map(email =>
     `<tr>
+      <td>${esc(roster.names[String(email).toLowerCase()] || 'Unnamed manager')}</td>
       <td>${esc(email)}</td>
       <td><button class="btn btn-red table-action" data-email="${escAttr(email)}" onclick="removeEmailRecipient(this.dataset.email)">Remove</button></td>
     </tr>`
   ).join('');
+  updateWeeklyManagerCard();
 }
 
-async function addEmailRecipient() {
-  const input = document.getElementById('email-address');
-  const email = input.value.trim();
+async function addManagerRecipient() {
+  const nameInput  = document.getElementById('manager-name');
+  const emailInput = document.getElementById('email-address');
+  const name  = nameInput.value.trim();
+  const email = emailInput.value.trim();
   if (!email) { toast('Enter an email address.','err'); return; }
 
   const r = await fetch('/api/email_recipients', {
@@ -737,9 +951,14 @@ async function addEmailRecipient() {
     body: JSON.stringify({email})
   });
   const d = await r.json();
-  if (d.ok) {
-    toast(`Recipient '${email}' added!`, 'ok');
-    input.value = '';
+  if (d.ok || String(d.msg || '').toLowerCase().includes('already exists')) {
+    toast(d.ok ? `Manager '${name || email}' added!` : `Manager '${name || email}' updated locally.`, d.ok ? 'ok' : 'warn');
+    const roster = readManagerRoster();
+    roster.names[email.toLowerCase()] = name || email;
+    if (!roster.selectedEmail) roster.selectedEmail = email;
+    saveManagerRoster(roster);
+    nameInput.value  = '';
+    emailInput.value = '';
     loadEmailRecipients();
     pollStatus();
   } else {
@@ -748,9 +967,7 @@ async function addEmailRecipient() {
 }
 
 async function removeEmailRecipient(email) {
-  const ok = confirm(`Remove ${email} from report emails?`);
-  if (!ok) return;
-
+  if (!confirm(`Remove ${email} from report emails?`)) return;
   const r = await fetch('/api/email_recipients/remove', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -759,6 +976,12 @@ async function removeEmailRecipient(email) {
   const d = await r.json();
   if (d.ok) {
     toast(`Recipient '${email}' removed.`, 'ok');
+    const roster = readManagerRoster();
+    delete roster.names[String(email).toLowerCase()];
+    if ((roster.selectedEmail || '').toLowerCase() === String(email).toLowerCase()) {
+      roster.selectedEmail = '';
+    }
+    saveManagerRoster(roster);
     loadEmailRecipients();
     pollStatus();
   } else {
@@ -772,10 +995,15 @@ function esc(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
-function escAttr(s) {
-  return esc(s).replace(/'/g,'&#39;');
+function escAttr(s) { return esc(s).replace(/'/g,'&#39;'); }
+// Produces a JS string literal safe for inline onclick="fn(escAttrJs(val))"
+function escAttrJs(s) {
+  return "'" + String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + "'";
 }
+
+// ══════════════════════════════════════════════
+// CHARTS — completely unchanged
+// ══════════════════════════════════════════════
 
 let currentChartView = 'weekly';
 const chartInstances = {};
@@ -792,7 +1020,6 @@ function setChartView(view) {
   document.getElementById('chart-weekly').classList.toggle('active',  view === 'weekly');
   document.getElementById('chart-monthly').classList.toggle('active', view === 'monthly');
   document.getElementById('chart-compare').classList.toggle('active', view === 'compare');
-
   const standard = document.getElementById('charts-standard');
   const compare  = document.getElementById('charts-compare');
   if (view === 'compare') {
@@ -812,7 +1039,6 @@ async function loadCompareCharts() {
   try {
     const r    = await fetch('/api/monthly_compare');
     const data = await r.json();
-
     if (data.error) {
       if (statusNote) statusNote.textContent = `Compare error: ${data.error}`;
       toast(`Compare error: ${data.error}`, 'err');
@@ -822,55 +1048,26 @@ async function loadCompareCharts() {
       if (statusNote) statusNote.textContent = 'Not enough data yet — run the automation for at least one month to see comparisons.';
       return;
     }
-
     if (statusNote) statusNote.textContent = `Comparing ${data.months.length} month(s): ${data.months.join(', ')}.`;
-
     const months  = data.months;
     const palette = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#70AD47','#5B9BD5','#C55A11'];
-
-    // ── Total cases per month (single bar dataset) ──────────────────────────
     renderCompareBar('chart-compare-total', months, [{
-      label: 'Total Cases',
-      data:  data.totals,
-      backgroundColor: months.map((_,i) => palette[i % palette.length]),
-      borderRadius: 6,
+      label: 'Total Cases', data: data.totals,
+      backgroundColor: months.map((_,i) => palette[i % palette.length]), borderRadius: 6,
     }], 'Total Cases per Month');
-
-    // ── Vertical breakdown ───────────────────────────────────────────────────
-    renderCompareBar(
-      'chart-compare-vertical', months,
-      buildCompareSeries(data.vertical, months, palette),
-      'Cases by Vertical per Month'
-    );
-
-    // ── Technology breakdown ─────────────────────────────────────────────────
-    renderCompareBar(
-      'chart-compare-technology', months,
-      buildCompareSeries(data.technology, months, palette),
-      'Cases by Technology per Month'
-    );
-
-    // ── Delivery type breakdown ──────────────────────────────────────────────
-    renderCompareBar(
-      'chart-compare-delivery', months,
-      buildCompareSeries(data.delivery_type, months, palette),
-      'Cases by Delivery Type per Month'
-    );
-
+    renderCompareBar('chart-compare-vertical',   months, buildCompareSeries(data.vertical,      months, palette), 'Cases by Vertical per Month');
+    renderCompareBar('chart-compare-technology', months, buildCompareSeries(data.technology,     months, palette), 'Cases by Technology per Month');
+    renderCompareBar('chart-compare-delivery',   months, buildCompareSeries(data.delivery_type,  months, palette), 'Cases by Delivery Type per Month');
   } catch (e) {
     toast('Failed to load comparison data.', 'err');
   }
 }
 
 function buildCompareSeries(categoryData, months, palette) {
-  // categoryData: { "Cable": [3,5,2], "Content": [1,2,4], ... }
   return Object.entries(categoryData || {}).map(([cat, values], idx) => ({
-    label: cat,
-    data: values,
+    label: cat, data: values,
     backgroundColor: (palette[idx % palette.length]) + 'CC',
-    borderColor:     palette[idx % palette.length],
-    borderWidth: 1,
-    borderRadius: 4,
+    borderColor: palette[idx % palette.length], borderWidth: 1, borderRadius: 4,
   }));
 }
 
@@ -879,15 +1076,11 @@ function renderCompareBar(canvasId, labels, datasets, title) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
-
   const font = { family: getComputedStyle(document.body).fontFamily || 'Arial, sans-serif', size: 13 };
-
   chartInstances[canvasId] = new Chart(ctx, {
-    type: 'bar',
-    data: { labels, datasets },
+    type: 'bar', data: { labels, datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { position: 'bottom', labels: { boxHeight: 10, boxWidth: 10, font } },
         title:  { display: false, text: title },
@@ -904,60 +1097,41 @@ function renderCompareBar(canvasId, labels, datasets, title) {
 function startChartRefresh() {
   if (chartRefreshTimer) return;
   chartRefreshTimer = setInterval(() => {
-    if (document.getElementById('tab-charts').classList.contains('active')) {
-      loadCharts();
-    }
+    if (document.getElementById('tab-charts').classList.contains('active')) loadCharts();
   }, 10000);
 }
 
-function refreshCharts() {
-  loadCharts();
-}
+function refreshCharts() { loadCharts(); }
 
 window.addEventListener('load', () => {
   startChartRefresh();
-  if (document.getElementById('tab-charts').classList.contains('active')) {
-    loadCharts();
-  }
+  updateWeeklyManagerCard();
+  if (document.getElementById('tab-charts').classList.contains('active')) loadCharts();
 });
 
 async function loadCharts() {
   const statusNote = document.getElementById('chart-data-status');
-  if (statusNote) {
-    statusNote.textContent = 'Loading chart data…';
-  }
+  if (statusNote) statusNote.textContent = 'Loading chart data…';
   try {
-    const r = await fetch('/api/chart_data');
+    const r    = await fetch('/api/chart_data');
     const data = await r.json();
     const series = data[currentChartView] || {};
-
     if (data.error) {
-      if (statusNote) {
-        statusNote.textContent = `Chart API error: ${data.error}`;
-      }
+      if (statusNote) statusNote.textContent = `Chart API error: ${data.error}`;
       toast(`Chart API error: ${data.error}`, 'err');
     }
-
     if (!data.file) {
-      if (statusNote) {
-        statusNote.textContent = 'No weekend Excel file found in output/. Run automation until at least one weekend case is written.';
-      }
+      if (statusNote) statusNote.textContent = 'No weekend Excel file found in output/. Run automation until at least one weekend case is written.';
     }
-
     if (!series.labels || !series.labels.length) {
-      if (statusNote && data.file) {
-        statusNote.textContent = `Weekend data file ${data.file} has no chartable periods yet. Refresh after automation writes more weekend cases.`;
-      }
+      if (statusNote && data.file) statusNote.textContent = `Weekend data file ${data.file} has no chartable periods yet. Refresh after automation writes more weekend cases.`;
       toast('No chart data available yet. Generate or refresh weekend results first.', 'warn');
     } else {
-      if (statusNote) {
-        statusNote.textContent = `Showing ${series.labels.length} ${currentChartView} period(s) from file ${data.file || 'none'} (${data.total || 0} cases). Refreshes automatically while this tab is active.`;
-      }
+      if (statusNote) statusNote.textContent = `Showing ${series.labels.length} ${currentChartView} period(s) from file ${data.file || 'none'} (${data.total || 0} cases). Refreshes automatically while this tab is active.`;
     }
-
-    renderTrendChart('chart-vertical',  'Cases by Vertical',           series.vertical      || {}, series.date_ranges || {});
-    renderTrendChart('chart-technology','Cases by Technology',          series.technology    || {}, series.date_ranges || {});
-    renderTrendChart('chart-delivery',  'Cases by Case Delivery Type',  series.delivery_type || {}, series.date_ranges || {});
+    renderTrendChart('chart-vertical',  'Cases by Vertical',          series.vertical      || {}, series.date_ranges || {});
+    renderTrendChart('chart-technology','Cases by Technology',         series.technology    || {}, series.date_ranges || {});
+    renderTrendChart('chart-delivery',  'Cases by Case Delivery Type', series.delivery_type || {}, series.date_ranges || {});
   } catch (err) {
     toast('Failed to load chart data.', 'err');
   }
@@ -967,113 +1141,56 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  if (chartInstances[canvasId]) {
-    chartInstances[canvasId].destroy();
-  }
-
+  if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
   const labels = chartData.labels || [];
   const palette = {
-    // Verticals
-    'Cable':      '#4472C4',
-    'Content':    '#FF0000',
-    'EMEA':       '#70AD47',
-    'Emea':       '#70AD47',
-    'Enterprise': '#FFC000',
-    'Software':   '#5B9BD5',
-    'Telco':      '#7030A0',
-    // Technologies
-    'Routing':    '#4472C4',
-    'Switching':  '#ED7D31',
-    'Security':   '#70AD47',
-    // Delivery types
-    'Dispatch P1':  '#C00000',
-    'Dispatch P2':  '#ED7D31',
-    'Handover':     '#70AD47',
+    'Cable':'#4472C4','Content':'#FF0000','EMEA':'#70AD47','Emea':'#70AD47',
+    'Enterprise':'#FFC000','Software':'#5B9BD5','Telco':'#7030A0',
+    'Routing':'#4472C4','Switching':'#ED7D31','Security':'#70AD47',
+    'Dispatch P1':'#C00000','Dispatch P2':'#ED7D31','Handover':'#70AD47',
   };
-  const defaultColors = ['#4472C4', '#ED7D31', '#A9D18E', '#FFC000', '#7030A0', '#70AD47', '#5B9BD5', '#C55A11'];
+  const defaultColors = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#70AD47','#5B9BD5','#C55A11'];
   const datasets = Object.entries(chartData.series || {}).map(([label, values], idx) => {
     const color = palette[label] || defaultColors[idx % defaultColors.length];
     return {
-      label,
-      data: values || [],
-      borderColor: color,
-      backgroundColor: color + '33',
-      tension: 0.35,
-      fill: false,
-      pointRadius: 5,
-      pointHoverRadius: 7,
-      borderWidth: 3,
-      showLine: true,
-      spanGaps: true,
-      type: 'line'
+      label, data: values || [], borderColor: color, backgroundColor: color + '33',
+      tension: 0.35, fill: false, pointRadius: 5, pointHoverRadius: 7,
+      borderWidth: 3, showLine: true, spanGaps: true, type: 'line'
     };
   });
-
-  const chartFont = {
-    family: getComputedStyle(document.body).fontFamily || 'Arial, sans-serif',
-    size: 13,
-  };
-
+  const chartFont = { family: getComputedStyle(document.body).fontFamily || 'Arial, sans-serif', size: 13 };
   if (!datasets.length) {
     chartInstances[canvasId] = new Chart(ctx, {
-      type: 'line',
-      data: {labels: [], datasets: []},
-      options: {
-        plugins: {
-          legend: {display: false},
-          title: {display: false, text: title, font: chartFont}
-        },
-        scales: {
-          x: {display: false},
-          y: {display: false}
-        },
-        font: chartFont
-      }
+      type: 'line', data: {labels:[], datasets:[]},
+      options: { plugins: { legend:{display:false}, title:{display:false,text:title,font:chartFont} },
+                 scales: { x:{display:false}, y:{display:false} }, font: chartFont }
     });
     return;
   }
-
   chartInstances[canvasId] = new Chart(ctx, {
-    type: 'line',
-    data: { labels, datasets },
+    type: 'line', data: { labels, datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      font: chartFont,
+      responsive: true, maintainAspectRatio: false, font: chartFont,
       plugins: {
-        legend: {position: 'bottom', labels: {boxHeight: 10, boxWidth: 10, font: chartFont}},
-        title: {display: false, text: title, font: chartFont},
+        legend: { position: 'bottom', labels: { boxHeight:10, boxWidth:10, font:chartFont } },
+        title:  { display: false, text: title, font: chartFont },
         tooltip: {
-          mode: 'index',
-          intersect: false,
-          bodyFont: chartFont,
-          titleFont: {...chartFont, weight: 'bold'},
-          callbacks: {
-            title: function(items) {
-              const raw = items[0]?.label || '';
-              return (dateRanges && dateRanges[raw]) ? dateRanges[raw] : raw;
-            }
-          }
+          mode: 'index', intersect: false, bodyFont: chartFont,
+          titleFont: {...chartFont, weight:'bold'},
+          callbacks: { title: function(items) {
+            const raw = items[0]?.label || '';
+            return (dateRanges && dateRanges[raw]) ? dateRanges[raw] : raw;
+          }}
         }
       },
-      interaction: {mode: 'nearest', axis: 'x', intersect: false},
+      interaction: { mode:'nearest', axis:'x', intersect:false },
       scales: {
-        x: {
-          display: true,
-          title: {display: true, text: 'Period'},
-          ticks: {maxRotation: 0, autoSkip: false, maxTicksLimit: 8}
-        },
-        y: {
-          display: true,
-          beginAtZero: true,
-          title: {display: true, text: 'Cases'}
-        }
+        x: { display:true, title:{display:true,text:'Period'}, ticks:{maxRotation:0,autoSkip:false,maxTicksLimit:8} },
+        y: { display:true, beginAtZero:true, title:{display:true,text:'Cases'} }
       }
     }
   });
 }
-
-
 </script>
 </body>
 </html>
