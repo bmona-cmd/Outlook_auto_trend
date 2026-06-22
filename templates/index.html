@@ -394,7 +394,7 @@
         </div>
         <button class="btn btn-green" onclick="addCustomer()">+ Add</button>
       </div>
-      <p class="form-hint">Manager field is saved locally in your browser and does not affect the backend mapping.</p>
+      <p class="form-hint">Manager Responsible is saved to the Excel mapping file alongside the customer entry.</p>
     </div>
 
     <div class="table-wrap">
@@ -800,7 +800,6 @@ async function loadCustomers() {
   const r    = await fetch('/api/customers');
   const data = await r.json();
   const tb   = document.getElementById('cust-tbody');
-  const customerManagers = readCustomerManagers();
   if (!data.length) {
     tb.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:24px">No customers found in mapping file.</td></tr>';
     return;
@@ -809,7 +808,7 @@ async function loadCustomers() {
     `<tr>
       <td>${esc(c.customer)}</td>
       <td class="muted">${esc(c.vertical)}</td>
-      <td>${esc(customerManagers[c.customer] || '—')}</td>
+      <td class="muted">${esc(c.manager || '—')}</td>
       <td><button class="btn btn-red table-action" onclick="removeCustomer(${escAttrJs(c.customer)})">Remove</button></td>
     </tr>`
   ).join('');
@@ -823,7 +822,7 @@ async function addCustomer() {
   const r = await fetch('/api/customers', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({customer: name, vertical: vert})
+    body: JSON.stringify({customer: name, vertical: vert, manager: manager})
   });
   const d = await r.json();
   if (d.ok) {
@@ -831,11 +830,6 @@ async function addCustomer() {
     document.getElementById('cust-name').value    = '';
     document.getElementById('cust-vert').value    = '';
     document.getElementById('cust-manager').value = '';
-    if (manager) {
-      const customerManagers = readCustomerManagers();
-      customerManagers[name] = manager;
-      saveCustomerManagers(customerManagers);
-    }
     loadCustomers();
   } else {
     toast(d.msg || 'Failed to add.', 'err');
