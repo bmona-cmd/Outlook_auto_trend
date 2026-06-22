@@ -72,21 +72,38 @@ def save_custom_devices(data: dict):
 def load_customers() -> list:
     if not MAPPING_FILE.exists():
         return []
+
     try:
         import pandas as pd
+
         df = pd.read_excel(MAPPING_FILE, engine="openpyxl")
         df.columns = [str(c).strip().lower() for c in df.columns]
+
         cc = next((c for c in df.columns if "customer" in c or "company" in c), None)
         vc = next((c for c in df.columns if "vertical" in c), None)
+        mc = next((c for c in df.columns if "manager" in c or "responsible" in c), None)
+
         if not cc or not vc:
             return []
-        return [{"customer": str(r[cc]).strip(), "vertical": str(r[vc]).strip()}
-                for _, r in df.iterrows()
-                if str(r[cc]).strip() not in ("", "nan")]
+
+        return [
+            {
+                "customer": str(r[cc]).strip(),
+                "vertical": str(r[vc]).strip(),
+                "manager": (
+                    str(r[mc]).strip()
+                    if mc and str(r[mc]).strip().lower() != "nan"
+                    else ""
+                ),
+            }
+            for _, r in df.iterrows()
+            if str(r[cc]).strip() not in ("", "nan")
+        ]
+
     except Exception:
         return []
 
-def append_customer(customer: str, vertical: str) -> bool:
+def append_customer(customer: str, vertical: str, manager: str = "") -> bool:
     try:
         import pandas as pd
         from openpyxl import load_workbook
@@ -94,7 +111,7 @@ def append_customer(customer: str, vertical: str) -> bool:
             pd.DataFrame(columns=["Customer", "Vertical"]).to_excel(
                 MAPPING_FILE, index=False, engine="openpyxl")
         wb = load_workbook(MAPPING_FILE)
-        wb.active.append([customer, vertical])
+        wb.active.append([vertical, customer, manager])
         wb.save(MAPPING_FILE)
         try:
             from scripts.vertical_lookup import load_vertical_mapping
@@ -319,11 +336,16 @@ def api_add_customer():
     data     = request.get_json()
     customer = (data.get("customer") or "").strip()
     vertical = (data.get("vertical") or "").strip()
+    manager  = (data.get("manager") or "").strip()
+
     if not customer or not vertical:
         return jsonify({"ok": False, "msg": "Customer and vertical are required"}), 400
-    ok = append_customer(customer, vertical)
+
+    ok = append_customer(customer, vertical, manager)
+
     if ok:
-        push_log(f"Customer added: {customer} → {vertical}")
+        push_log(f"Customer added: {customer} → {vertical} ({manager})")
+
     return jsonify({"ok": ok})
 
 
