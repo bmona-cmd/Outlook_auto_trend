@@ -55,7 +55,7 @@ JUNK = [
 #   - Saturday 03:00 → Saturday 24:00
 #   - Sunday   03:00 → Sunday   24:00
 # ──────────────────────────────────────────
-TEST_MODE       = False
+TEST_MODE       = True
 IST             = timezone(timedelta(hours=5, minutes=30))
 HANDOVER_START  = (3,  0)
 HANDOVER_END    = (24, 0)   # midnight (end of day)
@@ -181,10 +181,23 @@ def within_window():
 
 
 def sleep_while_running(seconds):
-    for _ in range(seconds):
+    """
+    Sleep for `seconds` but wake instantly if:
+      - RUNNING goes False (stop)
+      - _send_requested goes True  (_wake_event is pulsed by app.py)
+    Also blocks (pauses) while _resume_event is cleared.
+    """
+    deadline = seconds  # countdown in whole seconds
+    while deadline > 0:
         if not RUNNING:
             return
-        time.sleep(1)
+        _resume_event.wait()        # block if paused during a send
+        # Wait up to 1 s OR until _wake_event fires
+        woken = _wake_event.wait(timeout=1)
+        if woken:
+            _wake_event.clear()     # reset for next use
+            return                  # interrupted — let the loop handle it
+        deadline -= 1
 
 
 # ──────────────────────────────────────────
@@ -644,7 +657,15 @@ def run_one_scan(page):
 # MAIN LOOP
 # ──────────────────────────────────────────
 
+import threading as _threading
+
 _report_sent_today = None
+_live_page         = None    # shared reference to live Playwright page
+_send_requested    = False   # set True by app.py to trigger a manual send
+_paused            = False   # True while the send is in progress
+_resume_event      = _threading.Event()
+_resume_event.set()          # starts unblocked
+_wake_event        = _threading.Event()  # pulsed to interrupt sleep immediately
 
 CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
@@ -672,9 +693,27 @@ def run_mail_reader():
         page.wait_for_timeout(10000)
         print("Outlook loaded ✓")
 
+        # Expose page so app.py can use it for manual email sends
+        global _live_page
+        _live_page = page
+
         while RUNNING:
 
             try:
+
+                # ── Manual send requested from dashboard ──
+                global _send_requested, _paused, _resume_event
+                if _send_requested:
+                    _send_requested = False
+                    _paused = True
+                    _resume_event.clear()   # block any concurrent sleep
+                    print("\n[Manual send] Automation PAUSED — sending report via Outlook Web...")
+                    try:
+                        send_report(page=page)
+                    finally:
+                        _paused = False
+                        _resume_event.set()  # unblock — resume scanning
+                        print("[Manual send] Automation RESUMED ✓")
 
                 # ── Reset tracker at the start of each new day ──
                 reset_if_new_day()
@@ -698,7 +737,7 @@ def run_mail_reader():
                             f" — Sending report email...\n"
                             f"{'='*55}"
                         )
-                        send_report(target_date=today)
+                        send_report(page=page, target_date=today)
                         _report_sent_today = today
 
                     elif (
@@ -714,7 +753,7 @@ def run_mail_reader():
                             f" — Sending Sunday report email...\n"
                             f"{'='*55}"
                         )
-                        send_report(target_date=yesterday)
+                        send_report(page=page, target_date=yesterday)
                         _report_sent_today = yesterday
 
                     print(
@@ -798,4 +837,8 @@ def run_mail_reader():
                     pass
                 sleep_while_running(30)
 
+    _live_page = None
+    _paused = False
+    _resume_event.set()
+    _wake_event.set()    # unblock any sleeping wait
     RUNNING = False

@@ -39,6 +39,7 @@ def push_log(msg: str):
 
 automation_thread = None
 email_thread      = None
+_live_page        = None   # set by read_mails when browser opens
 
 # ── patch read_mails to also push to log_buffer ───────────────────────────────
 _orig_print = builtins.print
@@ -231,35 +232,32 @@ def api_status():
     xl = latest_excel()
     return jsonify({
         "running":       mail_reader.RUNNING,
+        "paused":        getattr(mail_reader, "_paused", False),
         "logs":          logs,
         "latest_file":   xl.name if xl else "—",
         "email":         email_status(),
-        "email_sending": email_alive
+        "email_sending": getattr(mail_reader, "_paused", False)
     })
 
 @app.route("/api/send_report", methods=["POST"])
 def api_send_report():
     global email_thread
 
-    if email_thread and email_thread.is_alive():
-        return jsonify({"ok": False, "msg": "Email send already in progress"}), 409
+    page = getattr(mail_reader, "_live_page", None)
+    if page is None:
+        return jsonify({
+            "ok": False,
+            "msg": "Automation is not running — start it first so Outlook is open."
+        }), 400
 
-    status = email_status()
-    if not status["configured"]:
-        push_log(status["message"])
-        return jsonify({"ok": False, "msg": status["message"]}), 400
-
-    def _send():
-        push_log("Manual report email requested from dashboard.")
-        ok = email_report.send_report()
-        if ok:
-            push_log("Manual report email completed.")
-        else:
-            push_log("Manual report email failed.")
-
-    email_thread = threading.Thread(target=_send, daemon=True)
-    email_thread.start()
-    return jsonify({"ok": True, "msg": "Email send started"})
+    # Pause → send → resume, all on the Playwright-owning main thread.
+    # Set the flag then pulse _wake_event so the sleeping loop wakes INSTANTLY.
+    mail_reader._send_requested = True
+    wake = getattr(mail_reader, "_wake_event", None)
+    if wake:
+        wake.set()   # interrupts sleep_while_running immediately
+    push_log("Manual report email requested — pausing automation to send...")
+    return jsonify({"ok": True, "msg": "Sending now — automation will resume after"})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
