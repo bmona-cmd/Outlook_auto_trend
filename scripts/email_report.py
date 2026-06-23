@@ -11,11 +11,13 @@ Also callable manually from app.py via a stored page reference.
 import json
 from pathlib  import Path
 from datetime import datetime
+import importlib.util
 
 
 BASE_DIR    = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE_DIR / "email_config.json"
 OUTPUT_DIR  = BASE_DIR / "output"
+TRACKER_FILE = OUTPUT_DIR / "Weekend_Cases_Tracker.xlsx"
 
 
 # ==========================================
@@ -36,13 +38,9 @@ def load_config():
 # FIND LATEST EXCEL
 # ==========================================
 
-def get_latest_excel():
-    if not OUTPUT_DIR.exists():
-        return None
-    files = list(OUTPUT_DIR.glob("*.xlsx"))
-    if not files:
-        return None
-    return max(files, key=lambda f: f.stat().st_mtime)
+def get_report_excel():
+    """Return the canonical workbook that chart_exporter also reads."""
+    return TRACKER_FILE if TRACKER_FILE.exists() else None
 
 
 # ==========================================
@@ -50,6 +48,12 @@ def get_latest_excel():
 # ==========================================
 
 def _generate_charts() -> list:
+    if importlib.util.find_spec("matplotlib") is None:
+        print(
+            "  Chart generation failed: matplotlib is not installed. "
+            "Run: venv/bin/python -m pip install -r requirements.txt"
+        )
+        return []
     try:
         from scripts.chart_exporter import generate_all_charts
         charts = generate_all_charts()
@@ -58,6 +62,18 @@ def _generate_charts() -> list:
     except Exception as e:
         print(f"  Chart generation skipped: {e}")
         return []
+
+
+def _click_first_visible(page, selectors, timeout=3000):
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=timeout)
+            loc.click(timeout=timeout)
+            return sel
+        except Exception:
+            continue
+    return None
 
 
 # ==========================================
@@ -169,14 +185,16 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
         compose_open = True   # assume it worked; failures caught below
 
     # ── Wait for To field ─────────────────────────────────────────────────
-    to_field = None
     to_selectors = [
+        "div[role='textbox'][aria-label='To']",
+        "div[aria-label='To'][contenteditable='true']",
         "div[aria-label='To']",
         "input[aria-label='To']",
         "div[aria-label='To'] input",
         "div[class*='to'] input",
         "div[id*='to'] input",
     ]
+    to_field = None
     for sel in to_selectors:
         try:
             loc = page.locator(sel).first
@@ -194,17 +212,16 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
         )
 
     # ── Fill To ───────────────────────────────────────────────────────────
-    to_field.click()
     for recipient in recipients:
-        # Re-click To field before each recipient — focus may have moved after suggestion pick
-        try:
-            to_field.click(timeout=3000)
-        except Exception:
-            pass
+        focused_sel = _click_first_visible(page, to_selectors, timeout=3000)
+        if not focused_sel:
+            raise RuntimeError(f"Could not focus To field while adding {recipient}")
+
         page.wait_for_timeout(300)
 
-        # Type to trigger autocomplete
-        to_field.type(recipient, delay=40)
+        # Outlook rebuilds the To editor after resolving each recipient, so
+        # type through the active keyboard focus instead of reusing a locator.
+        page.keyboard.type(recipient, delay=40)
         page.wait_for_timeout(1500)   # wait for dropdown
 
         suggestion_selectors = [
@@ -219,7 +236,7 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
             try:
                 suggestion = page.locator(sel).first
                 if suggestion.count() > 0:
-                    suggestion.click(timeout=2000)
+                    page.keyboard.press("Enter")
                     picked = True
                     print(f"  Picked suggestion for: {recipient}")
                     break
@@ -230,7 +247,7 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
             page.keyboard.press("Enter")
             print(f"  No suggestion, confirmed typed: {recipient}")
 
-        page.wait_for_timeout(600)
+        page.wait_for_timeout(1000)
     print(f"  To filled: {recipients}")
 
     # ── Fill Subject ───────────────────────────────────────────────────────
@@ -278,6 +295,7 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
 
     if files_to_attach:
         print(f"  Attaching {len(files_to_attach)} file(s)...")
+        print(f"  Files: {[Path(f).name for f in files_to_attach]}")
         attached = False
 
         # Try attach button → Upload from computer
@@ -314,10 +332,31 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
                         continue
                 if attached:
                     break
+
+                # Some Outlook builds create a hidden file input after the
+                # Attach menu opens, without raising a file chooser event.
+                file_input = page.locator("input[type='file']").last
+                if file_input.count() > 0:
+                    file_input.set_input_files(files_to_attach)
+                    page.wait_for_timeout(5000)
+                    print("  Files attached via file input ✓")
+                    attached = True
+                    break
             except Exception:
                 continue
 
-        # Fallback: intercept any file input
+        # Fallback: set any existing file input directly, then try a chooser.
+        if not attached:
+            try:
+                file_input = page.locator("input[type='file']").last
+                if file_input.count() > 0:
+                    file_input.set_input_files(files_to_attach)
+                    page.wait_for_timeout(5000)
+                    print("  Files attached via fallback input ✓")
+                    attached = True
+            except Exception as e:
+                print(f"  Direct file input attach failed: {e}")
+
         if not attached:
             try:
                 with page.expect_file_chooser(timeout=5000) as fc_info:
@@ -326,7 +365,8 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
                     )
                 fc_info.value.set_files(files_to_attach)
                 page.wait_for_timeout(5000)
-                print("  Files attached via fallback ✓")
+                print("  Files attached via fallback chooser ✓")
+                attached = True
             except Exception as e:
                 print(f"  Attachment skipped: {e}")
 
@@ -427,7 +467,7 @@ def send_report(page=None, target_date=None):
                   "Pass the active page from read_mails.py.")
             return False
 
-        excel_file = get_latest_excel()
+        excel_file = get_report_excel()
 
         now      = target_date or datetime.now()
         weekday  = now.weekday()

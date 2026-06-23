@@ -13,13 +13,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+import os
 
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")           # headless — no display needed
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-from matplotlib.gridspec import GridSpec
 
 
 # ── paths ────────────────────────────────────────────────────────────────────
@@ -27,6 +23,15 @@ from matplotlib.gridspec import GridSpec
 BASE_DIR    = Path(__file__).resolve().parent.parent
 OUTPUT_FILE = BASE_DIR / "output" / "Weekend_Cases_Tracker.xlsx"
 CHARTS_DIR  = BASE_DIR / "output" / "charts"
+MPL_DIR     = BASE_DIR / "output" / ".matplotlib"
+MPL_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MPL_DIR))
+
+import matplotlib
+matplotlib.use("Agg")           # headless — no display needed
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from matplotlib.gridspec import GridSpec
 
 # HPE brand-adjacent palette
 PALETTE = [
@@ -63,6 +68,10 @@ def _value_counts(df: pd.DataFrame, col: str) -> pd.Series:
         .value_counts()
         .sort_index()
     )
+
+
+def _parse_dates(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce", format="mixed")
 
 
 def _bar(ax, series: pd.Series, title: str, color_list: list):
@@ -102,7 +111,7 @@ def _day_chart(sheet: str, day_name: str) -> Path | None:
 
     date_str = ""
     if not df.empty and "Date" in df.columns:
-        dates = pd.to_datetime(df["Date"], errors="coerce").dropna()
+        dates = _parse_dates(df["Date"]).dropna()
         if not dates.empty:
             date_str = f"  —  {dates.max().strftime('%d %b %Y')}"
 
@@ -131,7 +140,7 @@ def _day_chart(sheet: str, day_name: str) -> Path | None:
         color="#555", style="italic"
     )
 
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.08, right=0.95, bottom=0.18, top=0.82, wspace=0.45)
     out = CHARTS_DIR / f"{sheet.lower()}_charts.png"
     fig.savefig(out, dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
@@ -160,7 +169,7 @@ def _monthly_chart() -> Path | None:
     if "Date" not in combined.columns:
         return None
 
-    combined["_date"] = pd.to_datetime(combined["Date"], errors="coerce")
+    combined["_date"] = _parse_dates(combined["Date"])
     combined = combined[combined["_date"].notna()].copy()
     if combined.empty:
         return None
