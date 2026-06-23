@@ -1,265 +1,311 @@
 """
-chart_exporter.py  —  Generates PNG chart images from Weekend_Cases_Tracker.xlsx.
+chart_exporter.py - Generates email-ready PNG charts from Weekend_Cases_Tracker.xlsx.
 
-Produces:
-  output/charts/saturday_charts.png   — Vertical / Technology / Delivery breakdown for Saturday
-  output/charts/sunday_charts.png     — Same for Sunday
-  output/charts/monthly_summary.png   — Monthly totals + breakdown trend
+The exported images mirror the website Charts tab:
+  output/charts/weekly_charts.png  - latest weekend, split by Sat/Sun
+  output/charts/monthly_charts.png - current month, split by Week 1-5
 
 Called by email_report.py before sending the report email.
 """
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
-from datetime import datetime
 import os
+import re
 
 import pandas as pd
 
 
-# ── paths ────────────────────────────────────────────────────────────────────
-
-BASE_DIR    = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_FILE = BASE_DIR / "output" / "Weekend_Cases_Tracker.xlsx"
-CHARTS_DIR  = BASE_DIR / "output" / "charts"
-MPL_DIR     = BASE_DIR / "output" / ".matplotlib"
+CHARTS_DIR = BASE_DIR / "output" / "charts"
+MPL_DIR = BASE_DIR / "output" / ".matplotlib"
 MPL_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(MPL_DIR))
 
 import matplotlib
-matplotlib.use("Agg")           # headless — no display needed
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from matplotlib.gridspec import GridSpec
 
-# HPE brand-adjacent palette
-PALETTE = [
-    "#01A982", "#FF8300", "#C140FF", "#00739D",
-    "#FEC901", "#FF3C3C", "#00B388", "#5F249F",
+
+DEFAULT_VERTICAL = ["EMEA", "Cable", "Content", "Enterprise", "Telco", "Software"]
+DEFAULT_TECHNOLOGY = ["Routing", "Switching", "Security", "Software"]
+DEFAULT_DELIVERY = ["Dispatch P1", "Dispatch P2", "Handover"]
+
+PALETTE = {
+    "Cable": "#4472C4",
+    "Content": "#FF0000",
+    "EMEA": "#70AD47",
+    "Emea": "#70AD47",
+    "Enterprise": "#FFC000",
+    "Software": "#5B9BD5",
+    "Telco": "#7030A0",
+    "Routing": "#4472C4",
+    "Switching": "#ED7D31",
+    "Security": "#70AD47",
+    "Dispatch P1": "#C00000",
+    "Dispatch P2": "#ED7D31",
+    "Handover": "#70AD47",
+}
+DEFAULT_COLORS = [
+    "#4472C4",
+    "#ED7D31",
+    "#A9D18E",
+    "#FFC000",
+    "#7030A0",
+    "#70AD47",
+    "#5B9BD5",
+    "#C55A11",
 ]
 
-SHEET_MAP = {"Sat": "Saturday", "Sun": "Sunday"}
+
+def _parse_one(value):
+    if value is None:
+        return pd.NaT
+    try:
+        if pd.isna(value):
+            return pd.NaT
+    except Exception:
+        pass
+    if isinstance(value, (datetime, date)):
+        return pd.Timestamp(value)
+
+    text = str(value).strip()
+    if not text or text.lower() in ("nat", "none", "nan"):
+        return pd.NaT
+
+    padded = re.sub(
+        r"^(\d{1})([-/])([A-Za-z]+)([-/])(\d{2,4})$",
+        lambda m: f"0{m.group(1)}{m.group(2)}{m.group(3)}{m.group(4)}{m.group(5)}",
+        text,
+    )
+    for candidate in (padded, text):
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return pd.Timestamp(datetime.strptime(candidate, fmt))
+            except ValueError:
+                pass
+
+    return pd.Timestamp(pd.to_datetime(text, dayfirst=True, errors="coerce"))
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+def _parse_col(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return pd.to_datetime(series, utc=False, errors="coerce").dt.tz_localize(None)
+    return pd.Series([_parse_one(v) for v in series], index=series.index, dtype="datetime64[ns]")
 
-def _load_sheet(sheet: str) -> pd.DataFrame:
-    """Return a DataFrame for the given sheet, or empty DataFrame."""
+
+ACRONYMS = {"Emea": "EMEA", "Cfts": "CFTS", "Bngl": "BNGL"}
+ALIASES_LOWER = {
+    "entfin": "Enterprise",
+    "cloud": "Software",
+    "new dispatch p1": "Dispatch P1",
+    "new dispatch p2": "Dispatch P2",
+    "handover in": "Handover",
+    "handover-in": "Handover",
+}
+
+
+def _fix_case(value):
+    raw = str(value).replace("\xa0", "").strip()
+    if not raw or raw.lower() in ("nan", "none", "nat"):
+        return ""
+    normalized = " ".join(raw.lower().split())
+    alias = ALIASES_LOWER.get(normalized)
+    if alias:
+        return alias
+    if normalized.startswith("new ") and "dispatch" in normalized:
+        return normalized[4:].strip().title()
+    titled = raw.title()
+    return ACRONYMS.get(titled, titled)
+
+
+def _load_data() -> pd.DataFrame:
     if not OUTPUT_FILE.exists():
         return pd.DataFrame()
-    try:
-        df = pd.read_excel(OUTPUT_FILE, sheet_name=sheet, engine="openpyxl")
-        return df if not df.empty else pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
-
-
-def _value_counts(df: pd.DataFrame, col: str) -> pd.Series:
-    if df.empty or col not in df.columns:
-        return pd.Series(dtype=int)
-    return (
-        df[col]
-        .dropna()
-        .astype(str)
-        .str.strip()
-        .replace("", pd.NA)
-        .dropna()
-        .value_counts()
-        .sort_index()
-    )
-
-
-def _parse_dates(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series, errors="coerce", format="mixed")
-
-
-def _bar(ax, series: pd.Series, title: str, color_list: list):
-    """Draw a compact horizontal bar chart."""
-    if series.empty:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                transform=ax.transAxes, color="#888", fontsize=10)
-        ax.set_title(title, fontsize=11, fontweight="bold", pad=6)
-        ax.axis("off")
-        return
-
-    colors = [color_list[i % len(color_list)] for i in range(len(series))]
-    bars = ax.barh(series.index, series.values, color=colors, height=0.55, edgecolor="none")
-
-    for bar, val in zip(bars, series.values):
-        ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height() / 2,
-                str(val), va="center", ha="left", fontsize=9, color="#333")
-
-    ax.set_title(title, fontsize=11, fontweight="bold", pad=6)
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.set_xlabel("Cases", fontsize=8, color="#555")
-    ax.tick_params(axis="y", labelsize=9)
-    ax.tick_params(axis="x", labelsize=8)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.set_xlim(0, max(series.values) * 1.25)
-
-
-# ── per-day chart ─────────────────────────────────────────────────────────────
-
-def _day_chart(sheet: str, day_name: str) -> Path | None:
-    """Generate a 3-panel chart for one weekend day. Returns the saved PNG path."""
-    CHARTS_DIR.mkdir(parents=True, exist_ok=True)
-    df = _load_sheet(sheet)
-
-    fig = plt.figure(figsize=(14, 5))
-    fig.patch.set_facecolor("#F8F9FA")
-
-    date_str = ""
-    if not df.empty and "Date" in df.columns:
-        dates = _parse_dates(df["Date"]).dropna()
-        if not dates.empty:
-            date_str = f"  —  {dates.max().strftime('%d %b %Y')}"
-
-    fig.suptitle(
-        f"{day_name} Cases Summary{date_str}",
-        fontsize=14, fontweight="bold", color="#1A1A2E", y=1.02
-    )
-
-    gs = GridSpec(1, 3, figure=fig, wspace=0.45)
-    axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
-
-    cols_titles = [
-        ("Vertical",           "By Vertical"),
-        ("Technology",         "By Technology"),
-        ("Case Delivery Type", "By Delivery Type"),
-    ]
-
-    for ax, (col, title) in zip(axes, cols_titles):
-        _bar(ax, _value_counts(df, col), title, PALETTE)
-
-    # row count badge
-    total = len(df) if not df.empty else 0
-    fig.text(
-        0.99, 0.98, f"Total cases: {total}",
-        ha="right", va="top", fontsize=9,
-        color="#555", style="italic"
-    )
-
-    fig.subplots_adjust(left=0.08, right=0.95, bottom=0.18, top=0.82, wspace=0.45)
-    out = CHARTS_DIR / f"{sheet.lower()}_charts.png"
-    fig.savefig(out, dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    return out
-
-
-# ── monthly summary chart ─────────────────────────────────────────────────────
-
-def _monthly_chart() -> Path | None:
-    """
-    Generate a stacked-bar monthly summary across both sheets.
-    X-axis = month labels, bars stacked by Vertical.
-    """
-    CHARTS_DIR.mkdir(parents=True, exist_ok=True)
 
     frames = []
-    for sheet in ("Sat", "Sun"):
-        df = _load_sheet(sheet)
-        if not df.empty:
-            frames.append(df)
+    for sheet_name in ("Sat", "Sun"):
+        try:
+            df = pd.read_excel(OUTPUT_FILE, sheet_name=sheet_name, engine="openpyxl")
+        except Exception:
+            continue
+        if df.empty:
+            continue
+
+        df["_sheet"] = sheet_name
+        df["Date"] = _parse_col(df["Date"]) if "Date" in df.columns else pd.NaT
+        for col in ("Vertical", "Technology", "Case Delivery Type"):
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip().apply(_fix_case)
+        frames.append(df)
 
     if not frames:
-        return None
+        return pd.DataFrame()
 
     combined = pd.concat(frames, ignore_index=True)
-    if "Date" not in combined.columns:
-        return None
+    combined = combined[combined["Date"].notna()].copy()
+    if combined.empty:
+        return combined
 
-    combined["_date"] = _parse_dates(combined["Date"])
-    combined = combined[combined["_date"].notna()].copy()
+    combined["weekday"] = combined["Date"].dt.weekday
+    combined["day_name"] = combined["weekday"].map({5: "Sat", 6: "Sun"}).fillna(
+        combined["Date"].dt.strftime("%a")
+    )
+    combined["weekend_start"] = combined["Date"] - pd.to_timedelta(
+        (combined["weekday"] - 5) % 7, unit="d"
+    )
+    combined["week_of_month"] = (combined["Date"].dt.day - 1) // 7 + 1
+    combined["week_label"] = "Week " + combined["week_of_month"].astype(str)
+    return combined
+
+
+def _build_timeseries(df, group_col, category_col, defaults, labels):
+    if category_col not in df.columns or df.empty:
+        return {
+            "labels": labels,
+            "series": {k: [0] * len(labels) for k in defaults},
+            "totals": [0] * len(labels),
+        }
+
+    df2 = df[[group_col, category_col]].copy()
+    df2 = df2[df2[category_col].astype(str).str.strip() != ""]
+    grouped = df2.groupby([group_col, category_col]).size().unstack(fill_value=0)
+
+    categories = list(defaults)
+    for cat in grouped.columns.astype(str):
+        if cat not in categories:
+            categories.append(cat)
+
+    grouped = grouped.reindex(index=labels, columns=categories, fill_value=0)
+    return {
+        "labels": labels,
+        "series": {
+            str(c): [int(grouped.at[label, c]) for label in labels]
+            for c in categories
+        },
+        "totals": [int(x) for x in grouped.sum(axis=1)],
+    }
+
+
+def _chart_payload():
+    combined = _load_data()
     if combined.empty:
         return None
 
-    combined["_month"] = combined["_date"].dt.to_period("M")
-    combined["_month_label"] = combined["_date"].dt.strftime("%b %Y")
+    latest_weekend = combined["weekend_start"].max()
+    weekly_df = combined[combined["weekend_start"] == latest_weekend].copy()
 
-    month_order = (
-        combined[["_month", "_month_label"]]
-        .drop_duplicates()
-        .sort_values("_month")["_month_label"]
-        .tolist()
-    )
+    now = datetime.now()
+    monthly_df = combined[
+        (combined["Date"].dt.month == now.month)
+        & (combined["Date"].dt.year == now.year)
+    ].copy()
 
-    # ── figure: 2 rows — top: monthly totals bar, bottom: vertical stacked ───
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(max(8, len(month_order) * 1.4 + 2), 9))
-    fig.patch.set_facecolor("#F8F9FA")
-    fig.suptitle("Monthly Cases Summary", fontsize=14, fontweight="bold", color="#1A1A2E")
+    weekly_labels = ["Sat", "Sun"]
+    monthly_labels = ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"]
 
-    # top — total per month
-    totals = [int((combined["_month_label"] == m).sum()) for m in month_order]
-    bars = ax_top.bar(month_order, totals, color=PALETTE[0], width=0.55, edgecolor="none")
-    for bar, val in zip(bars, totals):
-        ax_top.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
-                    str(val), ha="center", va="bottom", fontsize=9, fontweight="bold")
-    ax_top.set_title("Total Cases per Month", fontsize=11, fontweight="bold")
-    ax_top.set_ylabel("Cases", fontsize=9)
-    ax_top.tick_params(axis="x", rotation=30, labelsize=9)
-    ax_top.spines[["top", "right"]].set_visible(False)
-    ax_top.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    return {
+        "weekly": {
+            "title": "Weekly Cases",
+            "subtitle": "Latest weekend split by Sat/Sun",
+            "vertical": _build_timeseries(weekly_df, "day_name", "Vertical", DEFAULT_VERTICAL, weekly_labels),
+            "technology": _build_timeseries(
+                weekly_df, "day_name", "Technology", DEFAULT_TECHNOLOGY, weekly_labels
+            ),
+            "delivery_type": _build_timeseries(
+                weekly_df, "day_name", "Case Delivery Type", DEFAULT_DELIVERY, weekly_labels
+            ),
+        },
+        "monthly": {
+            "title": "Monthly Cases",
+            "subtitle": f"{now.strftime('%B %Y')} split by week",
+            "vertical": _build_timeseries(
+                monthly_df, "week_label", "Vertical", DEFAULT_VERTICAL, monthly_labels
+            ),
+            "technology": _build_timeseries(
+                monthly_df, "week_label", "Technology", DEFAULT_TECHNOLOGY, monthly_labels
+            ),
+            "delivery_type": _build_timeseries(
+                monthly_df, "week_label", "Case Delivery Type", DEFAULT_DELIVERY, monthly_labels
+            ),
+        },
+    }
 
-    # bottom — stacked by Vertical
-    if "Vertical" in combined.columns:
-        pivot = (
-            combined.assign(Vertical=combined["Vertical"].fillna("Unknown").astype(str).str.strip())
-            .groupby(["_month_label", "Vertical"])
-            .size()
-            .unstack(fill_value=0)
-            .reindex(index=month_order, fill_value=0)
+
+def _draw_line_chart(ax, chart_data, title):
+    labels = chart_data["labels"]
+    plotted = False
+
+    for idx, (category, values) in enumerate(chart_data["series"].items()):
+        if not any(values):
+            continue
+        color = PALETTE.get(category, DEFAULT_COLORS[idx % len(DEFAULT_COLORS)])
+        ax.plot(
+            labels,
+            values,
+            marker="o",
+            linewidth=2.5,
+            markersize=6,
+            color=color,
+            label=category,
         )
-        bottom = [0] * len(month_order)
-        for i, col in enumerate(pivot.columns):
-            vals = pivot[col].tolist()
-            ax_bot.bar(month_order, vals, bottom=bottom, label=col,
-                       color=PALETTE[i % len(PALETTE)], width=0.55, edgecolor="none")
-            bottom = [b + v for b, v in zip(bottom, vals)]
+        plotted = True
 
-        ax_bot.set_title("Cases by Vertical (Monthly)", fontsize=11, fontweight="bold")
-        ax_bot.set_ylabel("Cases", fontsize=9)
-        ax_bot.tick_params(axis="x", rotation=30, labelsize=9)
-        ax_bot.spines[["top", "right"]].set_visible(False)
-        ax_bot.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax_bot.legend(loc="upper left", fontsize=8, framealpha=0.7, ncol=2)
+    ax.set_title(title, fontsize=12, fontweight="bold", pad=8)
+    ax.set_xlabel("Period", fontsize=9)
+    ax.set_ylabel("Cases", fontsize=9)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax.grid(True, axis="y", color="#E5E7EB", linewidth=0.8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(axis="x", labelsize=9)
+    ax.tick_params(axis="y", labelsize=9)
+    ax.set_ylim(bottom=0)
+
+    if plotted:
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3, fontsize=8, frameon=False)
     else:
-        ax_bot.axis("off")
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes, color="#6B7280")
 
-    fig.tight_layout()
-    out = CHARTS_DIR / "monthly_summary.png"
-    fig.savefig(out, dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
+
+def _render_period_image(period_key: str, period_data: dict) -> Path:
+    CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 12))
+    fig.patch.set_facecolor("#F8F9FA")
+    fig.suptitle(period_data["title"], fontsize=17, fontweight="bold", color="#111827", y=0.985)
+    fig.text(0.5, 0.955, period_data["subtitle"], ha="center", fontsize=10, color="#6B7280")
+
+    _draw_line_chart(axes[0], period_data["vertical"], "Cases by Vertical")
+    _draw_line_chart(axes[1], period_data["technology"], "Cases by Technology")
+    _draw_line_chart(axes[2], period_data["delivery_type"], "Cases by Delivery Type")
+
+    fig.subplots_adjust(left=0.08, right=0.97, top=0.91, bottom=0.08, hspace=0.58)
+    out = CHARTS_DIR / f"{period_key}_charts.png"
+    fig.savefig(out, dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     return out
 
 
-# ── public API ────────────────────────────────────────────────────────────────
-
 def generate_all_charts() -> list[Path]:
     """
-    Generate all chart images and return a list of existing PNG paths.
-    Safe to call even if the Excel file is missing — returns [].
+    Generate the same Weekly and Monthly chart views shown in the website.
+    Returns existing PNG paths for email attachment.
     """
+    payload = _chart_payload()
+    if not payload:
+        return []
+
     paths = []
-    try:
-        sat = _day_chart("Sat", "Saturday")
-        if sat and sat.exists():
-            paths.append(sat)
-    except Exception as e:
-        print(f"Chart export warning (Saturday): {e}")
-
-    try:
-        sun = _day_chart("Sun", "Sunday")
-        if sun and sun.exists():
-            paths.append(sun)
-    except Exception as e:
-        print(f"Chart export warning (Sunday): {e}")
-
-    try:
-        mon = _monthly_chart()
-        if mon and mon.exists():
-            paths.append(mon)
-    except Exception as e:
-        print(f"Chart export warning (Monthly): {e}")
-
+    for key in ("weekly", "monthly"):
+        try:
+            path = _render_period_image(key, payload[key])
+            if path.exists():
+                paths.append(path)
+        except Exception as exc:
+            print(f"Chart export warning ({key}): {exc}")
     return paths
