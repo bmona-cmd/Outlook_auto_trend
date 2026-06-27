@@ -12,13 +12,12 @@ from scripts.excel_writer import (
 
 from scripts.tracker import (
     already_processed,
-    mark_processed,
-    reset_if_new_day
+    mark_processed
 )
 
 from scripts.logger import logger
 
-from scripts.email_report import send_report
+from scripts.email_report import send_report          # ← NEW
 
 from pathlib import Path
 
@@ -51,82 +50,29 @@ JUNK = [
 # ──────────────────────────────────────────
 # CONFIG
 # TEST_MODE = True  → any day / any time
-# TEST_MODE = False → Fri-Sun weekend tracking:
-#   - Saturday 03:00 → Saturday 24:00
-#   - Sunday   03:00 → Sunday   24:00
+# TEST_MODE = False → Sat+Sun, delivery-type windows below
 # ──────────────────────────────────────────
-TEST_MODE       = True
-IST             = timezone(timedelta(hours=5, minutes=30))
-HANDOVER_START  = (3,  0)
-HANDOVER_END    = (24, 0)   # midnight (end of day)
+TEST_MODE  = False
+IST        = timezone(timedelta(hours=5, minutes=30))
+HANDOVER_START  = (0,  0)    # midnight — all day
+HANDOVER_END    = (23, 59)   # end of day
 DISPATCH_START  = (6,  30)
 DISPATCH_END    = (18, 30)
-SLEEP_SECS      = 300       # 5 min between scans
-RUNNING         = False
+SLEEP_SECS = 60           # 1 min between scans
+RUNNING    = False
+
+# Folder config — set at start time via run_mail_reader()
+_dispatch_folder = "inbox"
+_handover_folder = "inbox"
+_em_name         = ""     # EM selected on Email tab, saved per row in Excel
 
 TIME_RE = re.compile(
     r'\b(\d{1,2}):(\d{2})\s*(AM|PM)\b', re.IGNORECASE
 )
 STALE = [
     "yesterday",
-    "monday", "tuesday", "wednesday", "thursday", "friday"
+    "monday","tuesday","wednesday","thursday","friday","fri"
 ]
-
-
-def get_stale_words():
-    """
-    Dynamic stale-word list based on current day.
-    On Sunday  -> also stale: saturday, sat
-    On Saturday -> nothing extra (saturday is today)
-    """
-    words = list(STALE)
-    if ist_now().weekday() == 6:   # Sunday
-        words += ["saturday", "sat"]
-    return words
-
-
-def is_row_from_today(el) -> bool:
-    """
-    Read the aria-label on the Outlook row element.
-    Outlook sets aria-label to e.g.:
-      'Received Saturday June 7, ...'   (yesterday, on Sunday)
-      'Received Sunday June 8, ...'     (today, on Sunday)
-    We compare the date in the label to today's IST date.
-    Falls back to True (don't block) if aria-label is unavailable.
-    """
-    try:
-        aria = el.get_attribute("aria-label") or ""
-        if not aria:
-            return True  # can't tell -- don't block
-
-        import re as _re
-        m = _re.search(
-            r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|'
-            r'Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|'
-            r'Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})',
-            aria, _re.IGNORECASE
-        )
-        if not m:
-            return True  # can't parse -- don't block
-
-        month_str = m.group(1)[:3].lower()
-        day_num   = int(m.group(2))
-
-        month_map = {
-            "jan": 1,  "feb": 2,  "mar": 3,  "apr": 4,
-            "may": 5,  "jun": 6,  "jul": 7,  "aug": 8,
-            "sep": 9,  "oct": 10, "nov": 11, "dec": 12
-        }
-        month_num = month_map.get(month_str)
-        if not month_num:
-            return True
-
-        now = ist_now()
-        return now.month == month_num and now.day == day_num
-
-    except Exception:
-        return True  # on any error -- don't block
-
 
 # ──────────────────────────────────────────
 # HELPERS
@@ -135,149 +81,96 @@ def is_row_from_today(el) -> bool:
 def ist_now():
     return datetime.now(IST)
 
-
 def _mins(h, m):
     return h * 60 + m
-
 
 def handover_start_mins():
     return _mins(*HANDOVER_START)
 
-
 def handover_end_mins():
-    return _mins(*HANDOVER_END)   # 1440 = midnight
-
+    return _mins(*HANDOVER_END)
 
 def dispatch_start_mins():
     return _mins(*DISPATCH_START)
 
-
 def dispatch_end_mins():
     return _mins(*DISPATCH_END)
 
-
-def scan_start_mins(now=None):
-    return handover_start_mins()
-
+def scan_start_mins():
+    return min(handover_start_mins(), dispatch_start_mins())
 
 def scan_end_mins():
-    return handover_end_mins()
-
-
-def is_handover_time(row_mins, now=None):
-    return handover_start_mins() <= row_mins <= handover_end_mins()
-
+    return max(handover_end_mins(), dispatch_end_mins())
 
 def within_window():
     if TEST_MODE:
         return True
     n = ist_now()
-    # Active only on Saturday and Sunday
-    if n.weekday() not in (5, 6):
-        return False
-    now_mins = _mins(n.hour, n.minute)
-    # Window open from 03:00 through midnight
-    return now_mins >= handover_start_mins()
+    # Run every day — same behaviour on weekdays for testing
+    return True
 
 
 def sleep_while_running(seconds):
-    """
-    Sleep for `seconds` but wake instantly if:
-      - RUNNING goes False (stop)
-      - _send_requested goes True  (_wake_event is pulsed by app.py)
-    Also blocks (pauses) while _resume_event is cleared.
-    """
-    deadline = seconds  # countdown in whole seconds
-    while deadline > 0:
+    for _ in range(seconds):
         if not RUNNING:
             return
-        _resume_event.wait()        # block if paused during a send
-        # Wait up to 1 s OR until _wake_event fires
-        woken = _wake_event.wait(timeout=1)
-        if woken:
-            _wake_event.clear()     # reset for next use
-            return                  # interrupted — let the loop handle it
-        deadline -= 1
+        time.sleep(1)
 
 
 # ──────────────────────────────────────────
 # ROW TIMESTAMP CHECK
-#   True      → inside matching delivery-type window
-#   False     → outside matching window, but keep scanning
-#   "stop"    → before all report windows or stale (old date)
-#   None      → no readable timestamp
 # ──────────────────────────────────────────
 
 def delivery_type_hints(text):
-    low   = text.lower()
+    low = text.lower()
     hints = set()
-
     if "dispatch" in low:
         hints.add("dispatch")
-
     if any(sig in low for sig in (
         "handover", "[ho]", "ho:", "ho created", "-ho",
         "[ho-mw]", "ho-mw", "| ho |", "|ho|", "case created"
     )):
         hints.add("handover")
-
     return hints
-
 
 def _row_time_mins(text):
     low = text.lower()
-
-    for sig in get_stale_words():
+    for sig in STALE:
         if sig in low:
             return "stale"
-
     if re.search(r'\b\d{2}/\d{2}/\d{2}\b', text):
         return "stale"
-
     m = TIME_RE.search(text)
     if not m:
         return None
-
     h  = int(m.group(1))
     mn = int(m.group(2))
     ap = m.group(3).upper()
-
     if ap == "PM" and h != 12:
         h += 12
     if ap == "AM" and h == 12:
         h = 0
-
     return _mins(h, mn)
-
 
 def row_in_window(text):
     if TEST_MODE:
         return True
-
     row_mins = _row_time_mins(text)
-
     if row_mins is None:
         return None
-
-    if row_mins == "stale" or row_mins < handover_start_mins():
+    # Only stop on stale — never stop on time alone
+    if row_mins == "stale":
         return "stop"
-
     hints = delivery_type_hints(text)
-
-    if "handover" in hints and is_handover_time(row_mins):
-        return True
-
-    if "dispatch" in hints and dispatch_start_mins() <= row_mins <= dispatch_end_mins():
-        return True
-
-    # Replies or ambiguous rows may not carry a clear delivery type until opened.
-    # Keep them eligible when they fall into either valid reporting window.
+    if "handover" in hints:
+        return True if handover_start_mins() <= row_mins <= handover_end_mins() else False
+    if "dispatch" in hints:
+        return True if dispatch_start_mins() <= row_mins <= dispatch_end_mins() else False
     if not hints:
         return (
-            is_handover_time(row_mins)
+            handover_start_mins() <= row_mins <= handover_end_mins()
             or dispatch_start_mins() <= row_mins <= dispatch_end_mins()
         )
-
     return False
 
 
@@ -323,7 +216,6 @@ def _norm(s):
     s = re.sub(r'^(re|fw|fwd)\s*:\s*', '', s.strip().lower())
     return re.sub(r'\s+', ' ', s).strip()
 
-
 def _row_timestamp(row_text):
     """Extract the time string from the row for use in ID."""
     m = TIME_RE.search(row_text)
@@ -331,16 +223,12 @@ def _row_timestamp(row_text):
         return m.group(0).strip().lower().replace(" ", "")
     return "notime"
 
-
 def make_id(details, subject):
     case = details.get("Case#", "").strip()
     typ  = details.get("Case Delivery Type", "").lower().strip()
-    if case and typ:
-        return f"{case}_{typ}"
-    if case:
-        return f"{case}_unknown"
+    if case and typ:  return f"{case}_{typ}"
+    if case:          return f"{case}_unknown"
     return f"subj_{_norm(subject)}"
-
 
 def make_scan_sid(subject, row_text):
     """
@@ -372,7 +260,7 @@ def extract_body(page):
                 if text and len(text.strip()) > 20 \
                    and "no preview is available" not in text.lower():
                     return text.strip()
-        except Exception:
+        except:
             pass
     return ""
 
@@ -390,7 +278,7 @@ def is_pinned_row(el, text):
             or "pinned" in aria.lower()
             or text.strip().lower() == "pinned"
         )
-    except Exception:
+    except:
         return False
 
 
@@ -460,31 +348,44 @@ def process_mail(page, el, row_text, idx):
         return "skipped"
 
     # 5. Dedup against processed_mails.json
+    #    Use case#+delivery_type as key when available
+    #    (most specific). For new mails the delivery
+    #    type isn't known yet so we check case# alone
+    #    first — if same case+type already saved, skip.
     case_match = re.search(
         r'\b(\d{4}-\d{3,5}-\d{4,})\b', subject
     )
     case_num = case_match.group(1) if case_match else ""
-    needs_technology_update = technology_missing_for_case(case_num)
+    needs_technology_update = technology_missing_for_case(
+        case_num
+    )
 
     # Check if this exact case was already fully saved
+    # (any delivery type) — avoid re-saving same case twice
     if (
         case_num
-        and already_processed(f"{case_num}_handover")
-        and not needs_technology_update
+        and
+        already_processed(f"{case_num}_handover")
+        and
+        not needs_technology_update
     ):
         print("       → already processed (handover)")
         return "already"
     if (
         case_num
-        and already_processed(f"{case_num}_dispatch p1")
-        and not needs_technology_update
+        and
+        already_processed(f"{case_num}_dispatch p1")
+        and
+        not needs_technology_update
     ):
         print("       → already processed (dispatch p1)")
         return "already"
     if (
         case_num
-        and already_processed(f"{case_num}_dispatch p2")
-        and not needs_technology_update
+        and
+        already_processed(f"{case_num}_dispatch p2")
+        and
+        not needs_technology_update
     ):
         print("       → already processed (dispatch p2)")
         return "already"
@@ -509,7 +410,7 @@ def process_mail(page, el, row_text, idx):
     try:
         el.scroll_into_view_if_needed()
         el.click(timeout=6000)
-    except Exception:
+    except:
         try:
             page.wait_for_timeout(2000)
             el.click(timeout=6000)
@@ -541,6 +442,7 @@ def process_mail(page, el, row_text, idx):
 
     # 9. Save
     print("       → saving:")
+    details["EM"] = _em_name   # inject selected EM for this session
     for k, v in details.items():
         print(f"          {k}: {v}")
 
@@ -556,14 +458,82 @@ def process_mail(page, el, row_text, idx):
 # ──────────────────────────────────────────
 # FULL SCAN
 # ──────────────────────────────────────────
+# Outlook virtual-scrolls: only ~6 rows exist
+# in the DOM at any time. Old rows are removed
+# as new ones appear. We CANNOT pre-load all
+# rows. Instead we work with what's visible,
+# process each mail on the spot, then scroll
+# down to reveal the next batch — like reading
+# a newspaper page by page.
+#
+# Algorithm:
+#   while True:
+#     for each visible row (top → bottom):
+#       if pre-window → stop, return False
+#       process it
+#     scroll down one row-height
+#     if no new rows appeared → inbox bottom reached
+#     loop
+# ──────────────────────────────────────────
+
+def is_row_from_today(el) -> bool:
+    """
+    Returns True  → mail is from today (Sat/Sun), process it
+    Returns False → mail is from a different day, STOP scanning
+    Falls back to True when uncertain.
+    """
+    try:
+        aria = el.get_attribute("aria-label") or ""
+        text_preview = ""
+        try:
+            text_preview = el.inner_text(timeout=1000) or ""
+        except Exception:
+            pass
+        combined = (aria + " " + text_preview).lower()
+        # Block if non-weekend day name found
+        non_weekend = [
+            "friday", " fri ", "fri,", "fri\n",
+            "thursday", " thu ", "thu,",
+            "wednesday", " wed ", "wed,",
+            "tuesday", " tue ", "tue,",
+            "monday", " mon ", "mon,",
+            "yesterday"
+        ]
+        for word in non_weekend:
+            if word in combined:
+                return False
+        # Try date match from aria-label
+        import re as _re
+        m = _re.search(
+            r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|'
+            r'Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|'
+            r'Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})',
+            aria, _re.IGNORECASE
+        )
+        if not m:
+            return True
+        month_map = {
+            "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+            "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12
+        }
+        month_num = month_map.get(m.group(1)[:3].lower())
+        if not month_num:
+            return True
+        now = ist_now()
+        return now.month == month_num and now.day == int(m.group(2))
+    except Exception:
+        return True
+
 
 def run_one_scan(page):
 
     print("\nStarting full inbox scan...")
 
     saved = skipped = already = 0
-    processed_ids     = set()
+    processed_ids      = set()
     consecutive_no_new = 0
+    max_no_new         = 10
+    last_count         = 0
 
     while True:
 
@@ -581,7 +551,7 @@ def run_one_scan(page):
             try:
                 el   = rows.nth(i)
                 text = el.inner_text(timeout=3000)
-            except Exception:
+            except:
                 continue
 
             if not text or not text.strip():
@@ -593,7 +563,7 @@ def run_one_scan(page):
             fp_case = re.search(r'\b(\d{4}-\d{3,5}-\d{4,})\b', text)
             fp_time = TIME_RE.search(text)
             if fp_case and fp_time:
-                fp = f"{fp_case.group(1)}_{fp_time.group(0).replace(' ', '').lower()}"
+                fp = f"{fp_case.group(1)}_{fp_time.group(0).replace(' ','').lower()}"
             elif fp_case:
                 fp = fp_case.group(1)
             else:
@@ -605,24 +575,18 @@ def run_one_scan(page):
             processed_ids.add(fp)
             found_new = True
 
+            # STOP immediately when we hit a non-today mail
             if not TEST_MODE and not is_row_from_today(el):
-                print(f"    [{i}] not from today (aria-label date mismatch) — skipped")
-                skipped += 1
-                continue
+                print(f"\n  Old mail (not today) — scan complete")
+                print(f"  Scan totals: saved={saved} already={already} skipped={skipped}")
+                return True
 
             result = process_mail(page, el, text, i)
 
             if result == "stop":
-                print(
-                    "\n  Pre-03:00 mail reached — "
-                    "scan complete up to window boundary"
-                )
-                print(
-                    f"  Scan totals: "
-                    f"saved={saved} already={already} skipped={skipped}"
-                )
+                print(f"\n  Stale mail reached — scan complete")
+                print(f"  Scan totals: saved={saved} already={already} skipped={skipped}")
                 return True
-
             elif result == "saved":
                 saved += 1
             elif result == "already":
@@ -632,213 +596,290 @@ def run_one_scan(page):
 
         if not found_new:
             consecutive_no_new += 1
-            if consecutive_no_new >= 3:
+            if consecutive_no_new >= max_no_new:
                 print("  Reached inbox bottom")
                 break
         else:
             consecutive_no_new = 0
 
+        # Scroll to load more
         try:
             panel = page.locator("div[role='list']").first
-            panel.evaluate("el => el.scrollBy(0, 300)")
-        except Exception:
-            page.keyboard.press("ArrowDown")
+            if panel.count() > 0:
+                panel.evaluate("el => el.scrollBy(0, 1200)")
+                page.wait_for_timeout(600)
+                panel.evaluate("el => el.scrollBy(0, 1200)")
+                page.wait_for_timeout(600)
+            else:
+                raise Exception("no panel")
+        except:
+            try:
+                page.locator("div[role='option']").last.scroll_into_view_if_needed()
+                page.wait_for_timeout(600)
+            except:
+                page.keyboard.press("End")
+                page.wait_for_timeout(400)
 
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(1200)
 
-    print(
-        f"\n  Scan done: "
-        f"saved={saved} already={already} skipped={skipped}"
-    )
+        new_count = page.locator("div[role='option']").count()
+        if new_count == last_count:
+            try:
+                page.keyboard.press("PageDown")
+                page.wait_for_timeout(800)
+            except:
+                pass
+        last_count = new_count
+
+    print(f"\n  Scan done: saved={saved} already={already} skipped={skipped}")
     return True
 
 
 # ──────────────────────────────────────────
 # MAIN LOOP
 # ──────────────────────────────────────────
+# Every cycle:
+#   1. Reload Outlook (fresh inbox state)
+#   2. Scroll through ENTIRE inbox row by row
+#      processing every mail as we go,
+#      stopping when we hit a pre-03:00 mail
+#      or the inbox bottom
+#   3. Sleep 5 minutes
+#   4. Repeat until 18:30 IST
+#   5. After 18:30 — send Excel report by email
+# ──────────────────────────────────────────
 
-import threading as _threading
-
+# Track if report has been sent this session
+# so it doesn't send multiple times
 _report_sent_today = None
-_live_page         = None    # shared reference to live Playwright page
-_send_requested    = False   # set True by app.py to trigger a manual send
-_paused            = False   # True while the send is in progress
-_resume_event      = _threading.Event()
-_resume_event.set()          # starts unblocked
-_wake_event        = _threading.Event()  # pulsed to interrupt sleep immediately
-
 CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
-def run_mail_reader():
-    global RUNNING
-    global _report_sent_today
+def _scroll_to_top(page):
+    """Scroll the mail list to top so scan starts from newest mail."""
+    for sel in ["div[role='list']", "div[aria-label='Message list']"]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                loc.evaluate("el => el.scrollTo(0, 0)")
+                page.wait_for_timeout(600)
+                break
+        except:
+            pass
+    try:
+        page.keyboard.press("Home")
+        page.wait_for_timeout(400)
+    except:
+        pass
+    page.wait_for_timeout(800)
 
-    RUNNING = True
 
-    with sync_playwright() as p:
+def _navigate_to_folder(page, folder_name):
+    """
+    Navigate to a named folder in Outlook.
+    - 'inbox' → clicks the Inbox item in the sidebar
+    - anything else → searches all sidebar items for a text match
+    """
+    target = (folder_name or "inbox").strip()
 
-        browser = p.chromium.launch(
-            executable_path=CHROME_PATH,
-            headless=False
-        )
-        context = browser.new_context(storage_state=str(AUTH_FILE))
-        page    = context.new_page()
+    print(f"  → Navigating to folder: '{target}'")
 
-        print("\nOpening Outlook...")
-        page.goto(
-            "https://outlook.office.com/mail",
-            wait_until="domcontentloaded"
-        )
-        page.wait_for_timeout(10000)
-        print("Outlook loaded ✓")
-
-        # Expose page so app.py can use it for manual email sends
-        global _live_page
-        _live_page = page
-
-        while RUNNING:
-
+    try:
+        # Expand the folder tree if it's collapsed
+        for expand_sel in [
+            "button[aria-label='Expand folders']",
+            "button[title='Expand folders']",
+            "[aria-label='Show folder list']",
+        ]:
             try:
+                btn = page.locator(expand_sel).first
+                if btn.count() > 0 and btn.is_visible():
+                    btn.click(timeout=2000)
+                    page.wait_for_timeout(1000)
+                    break
+            except Exception:
+                pass
 
-                # ── Manual send requested from dashboard ──
-                global _send_requested, _paused, _resume_event
-                if _send_requested:
-                    _send_requested = False
-                    _paused = True
-                    _resume_event.clear()   # block any concurrent sleep
-                    print("\n[Manual send] Automation PAUSED — sending report via Outlook Web...")
-                    try:
-                        send_report(page=page)
-                    finally:
-                        _paused = False
-                        _resume_event.set()  # unblock — resume scanning
-                        print("[Manual send] Automation RESUMED ✓")
+        # Build a list of selectors to try — from most specific to broadest
+        selectors = [
+            f"[aria-label='{target}']",
+            f"[title='{target}']",
+            f"div[role='treeitem']:has-text('{target}')",
+            f"span:text-is('{target}')",
+            f"div[role='option']:has-text('{target}')",
+        ]
 
-                # ── Reset tracker at the start of each new day ──
-                reset_if_new_day()
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=2000):
+                    loc.click(timeout=4000)
+                    page.wait_for_timeout(3000)
+                    print(f"  → Folder '{target}' found and clicked ✓")
+                    return
+            except Exception:
+                continue
 
-                if not within_window():
-
-                    n         = ist_now()
-                    today     = n.date()
-                    yesterday = today - timedelta(days=1)
-
-                    # Send report once after window closes
-                    if (
-                        not TEST_MODE
-                        and _report_sent_today != today
-                        and n.weekday() in (5, 6)
-                        and _mins(n.hour, n.minute) >= scan_end_mins()
-                    ):
-                        print(
-                            f"\n{'='*55}\n"
-                            f"WINDOW CLOSED [{n.strftime('%H:%M')} IST]"
-                            f" — Sending report email...\n"
-                            f"{'='*55}"
-                        )
-                        send_report(page=page, target_date=today)
-                        _report_sent_today = today
-
-                    elif (
-                        not TEST_MODE
-                        and _report_sent_today != yesterday
-                        and n.weekday() == 0
-                        and yesterday.weekday() == 6
-                        and _mins(n.hour, n.minute) < handover_start_mins()
-                    ):
-                        print(
-                            f"\n{'='*55}\n"
-                            f"WINDOW CLOSED [Sunday missed] [{n.strftime('%H:%M')} IST]"
-                            f" — Sending Sunday report email...\n"
-                            f"{'='*55}"
-                        )
-                        send_report(page=page, target_date=yesterday)
-                        _report_sent_today = yesterday
-
-                    print(
-                        f"Outside window "
-                        f"[{n.strftime('%a %H:%M')} IST] — sleeping 60s"
-                    )
-                    sleep_while_running(60)
+        # Last resort: iterate ALL treeitem elements and match text
+        try:
+            items = page.locator("div[role='treeitem'], a[role='treeitem']")
+            count = items.count()
+            for i in range(count):
+                try:
+                    item = items.nth(i)
+                    txt  = item.inner_text(timeout=1000).strip()
+                    if txt.lower() == target.lower():
+                        item.click(timeout=4000)
+                        page.wait_for_timeout(3000)
+                        print(f"  → Folder '{target}' matched by text scan ✓")
+                        return
+                except Exception:
                     continue
+        except Exception:
+            pass
 
-                n   = ist_now()
-                day = (
-                    "Saturday" if n.weekday() == 5
-                    else "Sunday" if n.weekday() == 6
-                    else "TEST"
-                )
+        print(f"  → Warning: folder '{target}' not found in sidebar — scanning current view")
 
-                print(
-                    f"\n{'='*55}\n"
-                    f"SCAN START [{n.strftime('%H:%M')} IST — {day}]\n"
-                    f"{'='*55}"
-                )
+    except Exception as e:
+        print(f"  → Navigation error: {e} — scanning current view")
 
-                print("Reloading Outlook...")
-                page.reload()
-                page.wait_for_timeout(8000)
 
-                # Scroll to top of inbox before scanning
-                scrolled = False
-                for sel in [
-                    "div[role='list']",
-                    "div[aria-label='Message list']",
-                    "div.customScrollBar",
-                    "div[data-testid='MailList']",
-                ]:
-                    try:
-                        loc = page.locator(sel).first
-                        if loc.count() > 0:
-                            loc.evaluate("el => el.scrollTo(0, 0)")
-                            page.wait_for_timeout(600)
-                            scrolled = True
-                            break
-                    except Exception:
+def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""):
+    global RUNNING, _report_sent_today, _dispatch_folder, _handover_folder, _live_page, _em_name
+
+    RUNNING          = True
+    _dispatch_folder = (dispatch_folder or "inbox").strip()
+    _handover_folder = (handover_folder or "inbox").strip()
+    _em_name         = (em_name or "").strip()
+
+    print(f"\nFolder config:")
+    print(f"  Dispatch → '{_dispatch_folder}'")
+    print(f"  Handover → '{_handover_folder}'")
+    print(f"  EM       → '{_em_name}'")
+
+    browser = None
+    try:
+        with sync_playwright() as p:
+
+            browser = p.chromium.launch(
+                executable_path=CHROME_PATH,
+                headless=False
+            )
+            context = browser.new_context(storage_state=str(AUTH_FILE))
+            page    = context.new_page()
+            _live_page = page
+
+            print("\nOpening Outlook...")
+            page.goto(
+                "https://outlook.office.com/mail",
+                wait_until="domcontentloaded"
+            )
+            page.wait_for_timeout(10000)
+            print("Outlook loaded ✓")
+
+            while RUNNING:
+
+                try:
+
+                    if not within_window():
+                        n     = ist_now()
+                        today = n.date()
+                        if (
+                            not TEST_MODE
+                            and _report_sent_today != today
+                            and n.weekday() in (5, 6)
+                            and _mins(n.hour, n.minute) > scan_end_mins()
+                        ):
+                            print(
+                                f"\n{'='*55}\n"
+                                f"WINDOW CLOSED [{n.strftime('%H:%M')} IST]"
+                                f" — Sending report email...\n"
+                                f"{'='*55}"
+                            )
+                            send_report()
+                            _report_sent_today = today
+                        print(
+                            f"Outside window "
+                            f"[{n.strftime('%a %H:%M')} IST] — sleeping 60s"
+                        )
+                        sleep_while_running(60)
                         continue
 
-                try:
-                    first_row = page.locator("div[role='option']").first
-                    if first_row.count() > 0:
-                        first_row.click(timeout=3000)
-                        page.wait_for_timeout(300)
-                except Exception:
-                    pass
+                    n   = ist_now()
+                    day = (
+                        "Saturday" if n.weekday() == 5
+                        else "Sunday" if n.weekday() == 6
+                        else n.strftime("%A")
+                    )
 
-                try:
-                    page.keyboard.press("Home")
-                    page.wait_for_timeout(600)
-                except Exception:
-                    pass
+                    print(
+                        f"\n{'='*55}\n"
+                        f"SCAN START [{n.strftime('%H:%M')} IST — {day}]\n"
+                        f"{'='*55}"
+                    )
 
-                if not scrolled:
-                    print("  Warning: could not confirm scroll-to-top")
-                page.wait_for_timeout(800)
-
-                run_one_scan(page)
-
-                n    = ist_now()
-                wake = n + timedelta(seconds=SLEEP_SECS)
-                print(
-                    f"\nSleeping {SLEEP_SECS // 60} min "
-                    f"[now {n.strftime('%H:%M')} — "
-                    f"next ~{wake.strftime('%H:%M')} IST]"
-                )
-                sleep_while_running(SLEEP_SECS)
-
-            except Exception as e:
-                logger.error(str(e))
-                print(f"\nMain loop error: {e}")
-                try:
+                    print("Reloading Outlook...")
                     page.reload()
-                    page.wait_for_timeout(10000)
-                except Exception:
-                    pass
-                sleep_while_running(30)
+                    page.wait_for_timeout(8000)
 
-    _live_page = None
-    _paused = False
-    _resume_event.set()
-    _wake_event.set()    # unblock any sleeping wait
-    RUNNING = False
+                    if not RUNNING:
+                        break
+
+                    same_folder = _dispatch_folder.lower() == _handover_folder.lower()
+
+                    if same_folder:
+                        print(f"\n[Folder] Both in '{_dispatch_folder}' — single scan")
+                        _navigate_to_folder(page, _dispatch_folder)
+                        _scroll_to_top(page)
+                        if RUNNING:
+                            run_one_scan(page)
+                    else:
+                        print(f"\n[Folder] Dispatch → '{_dispatch_folder}'")
+                        _navigate_to_folder(page, _dispatch_folder)
+                        _scroll_to_top(page)
+                        if RUNNING:
+                            run_one_scan(page)
+
+                        if RUNNING:
+                            print(f"\n[Folder] Handover → '{_handover_folder}'")
+                            _navigate_to_folder(page, _handover_folder)
+                            _scroll_to_top(page)
+                            run_one_scan(page)
+
+                    if not RUNNING:
+                        break
+
+                    n    = ist_now()
+                    wake = n + timedelta(seconds=SLEEP_SECS)
+                    print(
+                        f"\nSleeping {SLEEP_SECS // 60} min "
+                        f"[now {n.strftime('%H:%M')} — "
+                        f"next ~{wake.strftime('%H:%M')} IST]"
+                    )
+                    sleep_while_running(SLEEP_SECS)
+
+                except Exception as e:
+                    logger.error(str(e))
+                    print(f"\nMain loop error: {e}")
+                    if not RUNNING:
+                        break
+                    try:
+                        page.reload()
+                        page.wait_for_timeout(10000)
+                    except:
+                        pass
+                    sleep_while_running(30)
+
+    except Exception as e:
+        print(f"\nBrowser error: {e}")
+    finally:
+        # Always close browser and reset state on exit
+        _live_page = None
+        RUNNING    = False
+        try:
+            if browser:
+                browser.close()
+                print("\nBrowser closed ✓")
+        except Exception as e:
+            print(f"\nBrowser close error: {e}")
+        print("\nAutomation stopped.")

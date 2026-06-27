@@ -206,18 +206,52 @@ def index():
 @app.route("/api/start", methods=["POST"])
 def api_start():
     global automation_thread
+
+    if automation_thread and not automation_thread.is_alive():
+        automation_thread = None
+
     if automation_thread and automation_thread.is_alive():
         return jsonify({"ok": False, "msg": "Already running"})
+
+    data             = request.get_json(silent=True) or {}
+    dispatch_folder  = data.get("dispatch_folder", "inbox").strip() or "inbox"
+    handover_folder  = data.get("handover_folder", "inbox").strip() or "inbox"
+    em_name          = data.get("em_name", "").strip()
+
     mail_reader.RUNNING = True
-    push_log("Automation started.")
+    push_log(f"Automation started. Dispatch: '{dispatch_folder}' | Handover: '{handover_folder}' | EM: '{em_name}'")
+
     automation_thread = threading.Thread(
-        target=mail_reader.run_mail_reader, daemon=True)
+        target=mail_reader.run_mail_reader,
+        kwargs={
+            "dispatch_folder": dispatch_folder,
+            "handover_folder": handover_folder,
+            "em_name":         em_name,
+        },
+        daemon=True
+    )
     automation_thread.start()
     return jsonify({"ok": True})
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
+    global automation_thread
     mail_reader.RUNNING = False
+
+    # Force-close the browser so the thread exits immediately
+    try:
+        lp = getattr(mail_reader, "_live_page", None)
+        if lp is not None:
+            lp.context.browser.close()
+    except Exception:
+        pass
+
+    # Wait up to 5 seconds for thread to finish
+    if automation_thread and automation_thread.is_alive():
+        automation_thread.join(timeout=5)
+
+    automation_thread    = None
+    mail_reader.RUNNING  = False
     push_log("Automation stopped by user.")
     return jsonify({"ok": True})
 
@@ -225,6 +259,7 @@ def api_stop():
 def api_status():
     email_alive = bool(email_thread and email_thread.is_alive())
     alive = bool(automation_thread and automation_thread.is_alive())
+    email_ready = alive and getattr(mail_reader, "_live_page", None) is not None
     if not alive and mail_reader.RUNNING:
         mail_reader.RUNNING = False
     with log_lock:
@@ -236,7 +271,8 @@ def api_status():
         "logs":          logs,
         "latest_file":   xl.name if xl else "—",
         "email":         email_status(),
-        "email_sending": getattr(mail_reader, "_paused", False)
+        "email_sending": getattr(mail_reader, "_paused", False),
+        "email_ready":   email_ready
     })
 
 @app.route("/api/send_report", methods=["POST"])
