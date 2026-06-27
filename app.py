@@ -38,7 +38,6 @@ def push_log(msg: str):
         log_buffer.append(line)
 
 automation_thread = None
-email_thread      = None
 _live_page        = None   # set by read_mails when browser opens
 
 # ── patch read_mails to also push to log_buffer ───────────────────────────────
@@ -257,42 +256,45 @@ def api_stop():
 
 @app.route("/api/status")
 def api_status():
-    email_alive = bool(email_thread and email_thread.is_alive())
     alive = bool(automation_thread and automation_thread.is_alive())
+    paused = getattr(mail_reader, "_paused", False)
     email_ready = alive and getattr(mail_reader, "_live_page", None) is not None
     if not alive and mail_reader.RUNNING:
         mail_reader.RUNNING = False
     with log_lock:
         logs = list(log_buffer)
     xl = latest_excel()
+    sleeping = getattr(mail_reader, "_sleeping", False)
     return jsonify({
         "running":       mail_reader.RUNNING,
-        "paused":        getattr(mail_reader, "_paused", False),
+        "paused":        paused,
+        "sleeping":      sleeping,
         "logs":          logs,
         "latest_file":   xl.name if xl else "—",
         "email":         email_status(),
-        "email_sending": getattr(mail_reader, "_paused", False),
-        "email_ready":   email_ready
+        "email_sending": paused,
+        "email_ready":   sleeping and not paused
     })
 
 @app.route("/api/send_report", methods=["POST"])
 def api_send_report():
-    global email_thread
+    if not mail_reader.RUNNING:
+        return jsonify({"ok": False, "msg": "Automation is not running."}), 400
+
+    if not getattr(mail_reader, "_sleeping", False):
+        return jsonify({"ok": False, "msg": "Scan is in progress — wait for the 1-min sleep window, then try again."}), 400
 
     page = getattr(mail_reader, "_live_page", None)
     if page is None:
-        return jsonify({
-            "ok": False,
-            "msg": "Automation is not running — start it first so Outlook is open."
-        }), 400
+        return jsonify({"ok": False, "msg": "Browser not ready."}), 400
 
-    # Pause → send → resume, all on the Playwright-owning main thread.
-    # Set the flag then pulse _wake_event so the sleeping loop wakes INSTANTLY.
+    # Set flag and wake the sleep so report sends immediately
     mail_reader._send_requested = True
     wake = getattr(mail_reader, "_wake_event", None)
     if wake:
-        wake.set()   # interrupts sleep_while_running immediately
-    push_log("Manual report email requested — pausing automation to send...")
+        wake.set()
+
+    push_log("Manual report requested — will send during current sleep window...")
     return jsonify({"ok": True, "msg": "Sending now — automation will resume after"})
 
 

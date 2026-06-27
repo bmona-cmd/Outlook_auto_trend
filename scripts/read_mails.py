@@ -71,7 +71,7 @@ TIME_RE = re.compile(
 )
 STALE = [
     "yesterday",
-    "monday","tuesday","wednesday","thursday","friday","fri"
+    "monday", "tuesday", "wednesday", "thursday", "friday", "fri"
 ]
 
 # ──────────────────────────────────────────
@@ -270,14 +270,30 @@ def extract_body(page):
 # ──────────────────────────────────────────
 
 def is_pinned_row(el, text):
+    """
+    Returns True if this DOM row is a section header (Pinned, Today, Yesterday…)
+    or an actual pinned mail — both should be skipped without stopping the scan.
+    """
     try:
         aria = el.get_attribute("aria-label") or ""
         attr = el.get_attribute("data-is-pinned") or ""
-        return (
-            attr == "true"
-            or "pinned" in aria.lower()
-            or text.strip().lower() == "pinned"
-        )
+        text_lower = text.strip().lower()
+        # Pinned mail attribute (OWA)
+        if attr == "true" or "pinned" in aria.lower():
+            return True
+        # Section-header rows: their entire text is just a label like
+        # "Pinned", "Today", "Yesterday", "This Week", etc.
+        # They have no case number and no time — short single-line text.
+        lines = [l.strip() for l in text_lower.splitlines() if l.strip()]
+        if len(lines) <= 2 and not re.search(r'\d{4}-\d{3,5}-\d{4,}', text):
+            section_labels = {
+                "pinned", "today", "yesterday", "this week", "last week",
+                "older", "this month", "earlier this month",
+                "focused", "other"
+            }
+            if any(text_lower.startswith(label) for label in section_labels):
+                return True
+        return False
     except:
         return False
 
@@ -301,8 +317,8 @@ def process_mail(page, el, row_text, idx):
         return "stop"
     if ts is False:
         return "skipped"
-    if ts is None:
-        return "skipped"
+    # ts is None → no time found in row text (can happen for grouped/unread rows)
+    # Allow these through so we don't silently drop valid today's emails
 
     low = row_text.lower()
 
@@ -476,53 +492,6 @@ def process_mail(page, el, row_text, idx):
 #     loop
 # ──────────────────────────────────────────
 
-def is_row_from_today(el) -> bool:
-    """
-    Returns True  → mail is from today (Sat/Sun), process it
-    Returns False → mail is from a different day, STOP scanning
-    Falls back to True when uncertain.
-    """
-    try:
-        aria = el.get_attribute("aria-label") or ""
-        text_preview = ""
-        try:
-            text_preview = el.inner_text(timeout=1000) or ""
-        except Exception:
-            pass
-        combined = (aria + " " + text_preview).lower()
-        # Block if non-weekend day name found
-        non_weekend = [
-            "friday", " fri ", "fri,", "fri\n",
-            "thursday", " thu ", "thu,",
-            "wednesday", " wed ", "wed,",
-            "tuesday", " tue ", "tue,",
-            "monday", " mon ", "mon,",
-            "yesterday"
-        ]
-        for word in non_weekend:
-            if word in combined:
-                return False
-        # Try date match from aria-label
-        import re as _re
-        m = _re.search(
-            r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|'
-            r'Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|'
-            r'Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})',
-            aria, _re.IGNORECASE
-        )
-        if not m:
-            return True
-        month_map = {
-            "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
-            "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12
-        }
-        month_num = month_map.get(m.group(1)[:3].lower())
-        if not month_num:
-            return True
-        now = ist_now()
-        return now.month == month_num and now.day == int(m.group(2))
-    except Exception:
-        return True
 
 
 def run_one_scan(page):
@@ -532,7 +501,7 @@ def run_one_scan(page):
     saved = skipped = already = 0
     processed_ids      = set()
     consecutive_no_new = 0
-    max_no_new         = 10
+    max_no_new         = 20   # increased: Outlook re-renders same rows often
     last_count         = 0
 
     while True:
@@ -562,10 +531,19 @@ def run_one_scan(page):
 
             fp_case = re.search(r'\b(\d{4}-\d{3,5}-\d{4,})\b', text)
             fp_time = TIME_RE.search(text)
+            # Include a delivery-type hint so the same case# appearing as
+            # both a Dispatch and a Handover email are treated as distinct rows
+            low_text = text.lower()
+            if "handover" in low_text or "[ho]" in low_text or "ho:" in low_text:
+                fp_type = "ho"
+            elif "dispatch" in low_text or "case created" in low_text:
+                fp_type = "dp"
+            else:
+                fp_type = "xx"
             if fp_case and fp_time:
-                fp = f"{fp_case.group(1)}_{fp_time.group(0).replace(' ','').lower()}"
+                fp = f"{fp_case.group(1)}_{fp_type}_{fp_time.group(0).replace(' ','').lower()}"
             elif fp_case:
-                fp = fp_case.group(1)
+                fp = f"{fp_case.group(1)}_{fp_type}"
             else:
                 fp = _norm(text[:120])
 
@@ -575,23 +553,28 @@ def run_one_scan(page):
             processed_ids.add(fp)
             found_new = True
 
-            # STOP immediately when we hit a non-today mail
-            if not TEST_MODE and not is_row_from_today(el):
-                print(f"\n  Old mail (not today) — scan complete")
-                print(f"  Scan totals: saved={saved} already={already} skipped={skipped}")
-                return True
 
             result = process_mail(page, el, text, i)
+
+
+            # After clicking a mail the DOM is rebuilt — rows locator is stale.
+            # Break inner loop and re-fetch from the outer while True.
+            if result in ("saved", "already"):
+                if result == "saved":
+                    saved += 1
+                else:
+                    already += 1
+                # Scroll back to top so we re-scan from newest mail
+                _scroll_to_top(page)
+                page.wait_for_timeout(1500)
+                consecutive_no_new = 0
+                break   # re-enter while True to get fresh rows locator
 
             if result == "stop":
                 print(f"\n  Stale mail reached — scan complete")
                 print(f"  Scan totals: saved={saved} already={already} skipped={skipped}")
                 return True
-            elif result == "saved":
-                saved += 1
-            elif result == "already":
-                already += 1
-            else:
+            elif result == "skipped":
                 skipped += 1
 
         if not found_new:
@@ -653,6 +636,12 @@ def run_one_scan(page):
 # so it doesn't send multiple times
 _report_sent_today = None
 CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# ── Manual send-report flags (set by app.py via /api/send_report) ──
+_send_requested = False   # app.py sets True → loop sends report then clears
+_paused         = False   # True while report is being sent
+_sleeping       = False   # True while between scans (safe window for send)
+_wake_event     = __import__("threading").Event()
 
 
 def _scroll_to_top(page):
@@ -746,8 +735,13 @@ def _navigate_to_folder(page, folder_name):
 
 def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""):
     global RUNNING, _report_sent_today, _dispatch_folder, _handover_folder, _live_page, _em_name
+    global _send_requested, _paused, _sleeping
 
     RUNNING          = True
+    _send_requested  = False
+    _paused          = False
+    _sleeping        = False
+    _wake_event.clear()
     _dispatch_folder = (dispatch_folder or "inbox").strip()
     _handover_folder = (handover_folder or "inbox").strip()
     _em_name         = (em_name or "").strip()
@@ -796,7 +790,7 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                                 f" — Sending report email...\n"
                                 f"{'='*55}"
                             )
-                            send_report()
+                            send_report(page=page)
                             _report_sent_today = today
                         print(
                             f"Outside window "
@@ -856,7 +850,22 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                         f"[now {n.strftime('%H:%M')} — "
                         f"next ~{wake.strftime('%H:%M')} IST]"
                     )
+                    _sleeping = True
                     sleep_while_running(SLEEP_SECS)
+                    _sleeping = False
+
+                    # Handle send request that arrived during sleep
+                    if _send_requested:
+                        _send_requested = False
+                        _paused = True
+                        print("\n" + "="*55 + "\nSENDING REPORT (requested during sleep)\n" + "="*55)
+                        try:
+                            send_report(page=page)
+                        except Exception as _e:
+                            print(f"  Report send error: {_e}")
+                        finally:
+                            _paused = False
+                        print("  Automation resumed.\n")
 
                 except Exception as e:
                     logger.error(str(e))

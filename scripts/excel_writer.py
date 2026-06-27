@@ -207,6 +207,23 @@ def append_to_excel(data, dt=None):
     for col_idx, value in enumerate(new_row, start=1):
         ws.cell(row=target_row, column=col_idx, value=value)
 
+    # Highlight the row red if any critical extraction field is blank.
+    # Critical fields: Customer (col3), Vertical (col4), Technology (col5),
+    # Case Delivery Type (col6). Comments (col8) and EM (col7) are optional.
+    CRITICAL_COLS = [3, 4, 5, 6]   # 1-based indices matching new_row order
+    has_blank = any(
+        not str(new_row[c - 1]).strip()
+        for c in CRITICAL_COLS
+    )
+    if has_blank:
+        red_fill = PatternFill("solid", start_color="FFB3B3")   # soft red
+        red_font = Font(name="Arial", color="7B0000")
+        for col_idx in range(1, len(COLUMNS) + 1):
+            cell = ws.cell(row=target_row, column=col_idx)
+            cell.fill = red_fill
+            cell.font = red_font
+        print(f"       [excel] Row {target_row} flagged red (blank fields detected)")
+
     _adjust_column_width(ws)
     # Save row first — nothing below can block this
     wb.save(OUTPUT_FILE)
