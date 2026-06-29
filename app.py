@@ -11,6 +11,7 @@ import threading
 import json
 import builtins
 import re
+import time
 
 # ── project imports (unchanged) ──────────────────────────────────────────────
 import scripts.read_mails as mail_reader
@@ -240,6 +241,28 @@ def api_start():
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
     global automation_thread
+
+    # If a report is currently being sent (manual OR automatic — both set
+    # _paused now), do NOT force-close the browser. Killing it mid-send
+    # leaves a half-filled compose window / partially-typed recipients and
+    # corrupts the send, which is what was forcing a manual restart.
+    # Wait for the send to finish first; poll every second, up to 2 minutes.
+    waited = 0
+    while getattr(mail_reader, "_paused", False) and waited < 120:
+        push_log("Stop requested — report is still sending, waiting for it to finish...") if waited == 0 else None
+        time.sleep(1)
+        waited += 1
+
+    if getattr(mail_reader, "_paused", False):
+        # Still sending after 2 minutes — something's stuck. Refuse to
+        # force-stop rather than risk corrupting/duplicating the send;
+        # the caller can retry once it clears.
+        return jsonify({
+            "ok": False,
+            "msg": "Report is still being sent after waiting 2 minutes — "
+                   "please wait for it to finish before stopping."
+        }), 409
+
     mail_reader.RUNNING = False
 
     # Force-close the browser so the thread exits immediately
@@ -857,4 +880,4 @@ _startup()
  
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False, threaded=True)

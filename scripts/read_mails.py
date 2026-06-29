@@ -69,10 +69,31 @@ _em_name         = ""     # EM selected on Email tab, saved per row in Excel
 TIME_RE = re.compile(
     r'\b(\d{1,2}):(\d{2})\s*(AM|PM)\b', re.IGNORECASE
 )
-STALE = [
-    "yesterday",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "fri"
+
+# Day names used by Outlook as section-header labels.
+# Any row whose text starts with one of these is from a previous day.
+_ALL_DAYS = [
+    "monday", "tuesday", "wednesday", "thursday", "friday",
+    "saturday", "sunday",
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun",
 ]
+
+def _stale_day_labels():
+    """
+    Return the set of day-name labels that represent *previous* days.
+    On any given day we want to stop when we hit a row labelled with
+    another day-of-week (Outlook uses these as section dividers:
+    "Yesterday", "Monday", "Tuesday", …).
+    We always include "yesterday" and every day name except today's,
+    so the list works correctly on weekdays as well as weekends.
+    """
+    today_name = ist_now().strftime("%A").lower()          # e.g. "monday"
+    today_short = ist_now().strftime("%a").lower()         # e.g. "mon"
+    stale = {"yesterday", "this week", "last week", "older"}
+    for d in _ALL_DAYS:
+        if d != today_name and d != today_short:
+            stale.add(d)
+    return stale
 
 # ──────────────────────────────────────────
 # HELPERS
@@ -135,14 +156,41 @@ def delivery_type_hints(text):
 
 def _row_time_mins(text):
     low = text.lower()
-    for sig in STALE:
-        if sig in low:
-            return "stale"
-    if re.search(r'\b\d{2}/\d{2}/\d{2}\b', text):
+    stale_labels = _stale_day_labels()
+
+    # ── Outlook mail-row timestamp logic ──────────────────────────────
+    # Outlook shows each mail row with a timestamp on the right:
+    #   TODAY's mails  → "6:44 AM"  (a real HH:MM AM/PM time)
+    #   OLDER mails    → "Yesterday", "Monday", "6/27" etc.
+    #
+    # IMPORTANT: stale-label checks run FIRST, before checking for a
+    # real time, because a subject can contain digit patterns that
+    # accidentally match TIME_RE (e.g. "P1 case 6:30 update").
+    # "Yesterday" in any position means the row is not from today.
+
+    # 1. "Yesterday" anywhere in the row → always stale.
+    if "yesterday" in low:
         return "stale"
+
+    # 2. Any other stale day/period label present in the row text.
+    #    Outlook places these as the timestamp on older mail rows, so
+    #    they appear somewhere within the full inner_text of the row.
+    for sig in stale_labels:
+        # Use word-boundary style match: sig surrounded by
+        # start/end of string, whitespace, or newline.
+        if re.search(r'(?:^|\s)' + re.escape(sig) + r'(?:\s|$)', low):
+            return "stale"
+
+    # 3. Short date stamps like "6/27" or "06/27/25" shown instead of a
+    #    time on mails older than today (no time → not today).
+    if re.search(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', text) and not TIME_RE.search(text):
+        return "stale"
+
+    # 4. Real time present → today's mail, parse it.
     m = TIME_RE.search(text)
     if not m:
-        return None
+        # No time, no stale label — safest to treat as stale.
+        return "stale"
     h  = int(m.group(1))
     mn = int(m.group(2))
     ap = m.group(3).upper()
@@ -156,10 +204,8 @@ def row_in_window(text):
     if TEST_MODE:
         return True
     row_mins = _row_time_mins(text)
-    if row_mins is None:
-        return None
-    # Only stop on stale — never stop on time alone
-    if row_mins == "stale":
+    # stale or no recognisable timestamp → stop the scan immediately
+    if row_mins is None or row_mins == "stale":
         return "stop"
     hints = delivery_type_hints(text)
     if "handover" in hints:
@@ -189,19 +235,27 @@ def get_subject(row_text):
             "| ho |"       in low, "|ho|"       in low,
             "case created" in low,
         ])
+        # Also match FW:/FWD: forwards (not just RE:) that carry a case# + P1/P2
         has_re = (
-            low.startswith("re:")
+            bool(re.match(r'^(re|fw|fwd)\s*:', low))
             and bool(re.search(r'\b\d{4}-\d{3,5}-\d{4,}\b', line))
             and bool(re.search(r'\bp[12]\b', low))
         )
         # Remove priority-change arrows before junk check
-        # so "P1 > P2" doesn't trigger the ">" junk filter
+        # so "P1 > P2" doesn't trigger the ">" junk filter.
+        # Also strip "| " pipe separators used in case subjects like
+        # "[HANDOVER] | P1-->P2 || TIGO..." so "|" doesn't hit junk filter.
         line_for_junk = re.sub(
-            r'\bP[1-5]\s*[-=]?>\s*P[1-5]\b',
+            r'\bP[1-5]\s*[-=]*>\s*P[1-5]\b',
             'PRICHANGE',
             line,
             flags=re.IGNORECASE
         )
+        # Remove pipes that are separators between case fields (not email headers)
+        # A pipe is a separator if it's surrounded by spaces or at start/end,
+        # rather than being part of an email address or header like "From: | To:"
+        if has_kw or has_re:
+            line_for_junk = re.sub(r'\s*\|\|?\s*', ' ', line_for_junk)
         is_junk = any(j in line_for_junk.lower() for j in JUNK)
         if (has_kw or has_re) and not is_junk:
             return re.sub(r'\s+', ' ', line).strip()
@@ -286,11 +340,10 @@ def is_pinned_row(el, text):
         # They have no case number and no time — short single-line text.
         lines = [l.strip() for l in text_lower.splitlines() if l.strip()]
         if len(lines) <= 2 and not re.search(r'\d{4}-\d{3,5}-\d{4,}', text):
-            section_labels = {
-                "pinned", "today", "yesterday", "this week", "last week",
-                "older", "this month", "earlier this month",
-                "focused", "other"
-            }
+            section_labels = (
+                {"pinned", "today", "this month", "earlier this month", "focused", "other"}
+                | _stale_day_labels()
+            )
             if any(text_lower.startswith(label) for label in section_labels):
                 return True
         return False
@@ -317,8 +370,7 @@ def process_mail(page, el, row_text, idx):
         return "stop"
     if ts is False:
         return "skipped"
-    # ts is None → no time found in row text (can happen for grouped/unread rows)
-    # Allow these through so we don't silently drop valid today's emails
+    # ts is True → row has a recognised today-time and is within window
 
     low = row_text.lower()
 
@@ -336,7 +388,7 @@ def process_mail(page, el, row_text, idx):
     # Check for priority-change pattern first (P1>P2, P1->P2)
     # and use the RIGHT side as the current priority.
     change_pm = re.search(
-        r'\bP[1-5]\s*[-=]?>\s*(P([1-5]))\b',
+        r'\bP[1-5]\s*[-=]*>\s*(P([1-5]))\b',
         row_text,
         re.IGNORECASE
     )
@@ -627,22 +679,56 @@ _wake_event     = __import__("threading").Event()
 
 
 def _scroll_to_top(page):
-    """Scroll the mail list to top so scan starts from newest mail."""
-    for sel in ["div[role='list']", "div[aria-label='Message list']"]:
+    """
+    Wait for the mail list to be rendered, then scroll to top
+    so the scan always starts from the newest (topmost) mail.
+    """
+    LIST_SELS = ["div[role='list']", "div[aria-label='Message list']"]
+
+    # 1. Wait up to 10 s for the mail list panel to appear after a
+    #    reload or folder navigation — it may not exist yet immediately.
+    list_loc = None
+    for _ in range(20):                       # 20 × 500 ms = 10 s max
+        for sel in LIST_SELS:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    list_loc = loc
+                    break
+            except Exception:
+                pass
+        if list_loc:
+            break
+        page.wait_for_timeout(500)
+
+    # 2. Also wait for at least one mail row to be visible —
+    #    the list container can appear before rows are rendered.
+    for _ in range(10):                       # 10 × 800 ms = 8 s max
         try:
-            loc = page.locator(sel).first
-            if loc.count() > 0:
-                loc.evaluate("el => el.scrollTo(0, 0)")
-                page.wait_for_timeout(600)
+            if page.locator("div[role='option']").count() > 0:
                 break
-        except:
+        except Exception:
             pass
+        page.wait_for_timeout(800)
+
+    # 3. Scroll the list panel to the very top.
+    if list_loc:
+        try:
+            list_loc.evaluate("el => el.scrollTo(0, 0)")
+            page.wait_for_timeout(400)
+            list_loc.evaluate("el => el.scrollTo(0, 0)")  # double-tap
+            page.wait_for_timeout(400)
+        except Exception:
+            pass
+
+    # 4. Keyboard Home as a belt-and-braces fallback.
     try:
         page.keyboard.press("Home")
         page.wait_for_timeout(400)
-    except:
+    except Exception:
         pass
-    page.wait_for_timeout(800)
+
+    page.wait_for_timeout(600)
 
 
 def _navigate_to_folder(page, folder_name):
@@ -772,7 +858,13 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                                 f" — Sending report email...\n"
                                 f"{'='*55}"
                             )
-                            send_report(page=page)
+                            _paused = True
+                            try:
+                                send_report(page=page)
+                            except Exception as _e:
+                                print(f"  Report send error: {_e}")
+                            finally:
+                                _paused = False
                             _report_sent_today = today
                         print(
                             f"Outside window "

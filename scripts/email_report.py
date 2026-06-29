@@ -212,42 +212,81 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
         )
 
     # ── Fill To ───────────────────────────────────────────────────────────
+    suggestion_selectors = [
+        "div[role='option']",
+        "li[role='option']",
+        "div[role='listbox'] div[role='option']",
+        "div[aria-label*='suggestion']",
+        "button[role='option']",
+    ]
+
     for recipient in recipients:
-        focused_sel = _click_first_visible(page, to_selectors, timeout=3000)
+        # Refocus the To field. After picking a suggestion (click, not
+        # Enter), Outlook can take well over the original 3s to finish
+        # rebuilding the editor before it's interactable again — so retry
+        # with a longer per-attempt timeout instead of failing on the first
+        # miss.
+        focused_sel = None
+        for attempt in range(4):                  # up to ~4 x 6s ≈ 24s total
+            focused_sel = _click_first_visible(page, to_selectors, timeout=6000)
+            if focused_sel:
+                break
+            print(f"  To field not ready yet (attempt {attempt + 1}/4) — retrying...")
+            page.wait_for_timeout(1000)
+
         if not focused_sel:
             raise RuntimeError(f"Could not focus To field while adding {recipient}")
 
+        # Dismiss any leftover dropdown from the previous recipient so it
+        # can't be mistaken for the current one's suggestion below.
+        page.keyboard.press("Escape")
         page.wait_for_timeout(300)
 
         # Outlook rebuilds the To editor after resolving each recipient, so
         # type through the active keyboard focus instead of reusing a locator.
-        page.keyboard.type(recipient, delay=40)
-        page.wait_for_timeout(1500)   # wait for dropdown
+        page.keyboard.type(recipient, delay=60)
 
-        suggestion_selectors = [
-            "div[role='option']",
-            "li[role='option']",
-            "div[role='listbox'] div[role='option']",
-            "div[aria-label*='suggestion']",
-            "button[role='option']",
-        ]
-        picked = False
-        for sel in suggestion_selectors:
+        # Poll for the autocomplete dropdown instead of a single fixed sleep.
+        # Outlook's render time varies (a few hundred ms up to ~2s), and a
+        # stale/leftover dropdown element can satisfy a one-shot count()
+        # check even when the *current* recipient's suggestion isn't ready
+        # yet — that mismatch is what was causing names to run together.
+        suggestion = None
+        for _ in range(10):                       # up to ~2s total
+            page.wait_for_timeout(200)
+            for sel in suggestion_selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() > 0 and loc.is_visible():
+                        suggestion = loc
+                        break
+                except Exception:
+                    continue
+            if suggestion:
+                break
+
+        if suggestion:
+            # Click the suggestion directly — far more reliable than a blind
+            # Enter press, which can land before the dropdown has taken
+            # keyboard focus and just insert a space/newline instead of
+            # committing a recipient chip.
             try:
-                suggestion = page.locator(sel).first
-                if suggestion.count() > 0:
-                    page.keyboard.press("Enter")
-                    picked = True
-                    print(f"  Picked suggestion for: {recipient}")
-                    break
+                suggestion.click(timeout=2000)
+                print(f"  Picked suggestion for: {recipient}")
             except Exception:
-                continue
-
-        if not picked:
+                page.keyboard.press("Enter")
+                print(f"  Suggestion click failed, fell back to Enter for: {recipient}")
+        else:
+            # No dropdown appeared — common when the typed text is already
+            # a fully valid, resolvable email address. Commit it directly.
             page.keyboard.press("Enter")
             print(f"  No suggestion, confirmed typed: {recipient}")
 
-        page.wait_for_timeout(1000)
+        # Give Outlook time to render the recipient as a confirmed chip
+        # and finish rebuilding the To editor before the next loop
+        # iteration tries to refocus and type the following name.
+        page.wait_for_timeout(1800)
+
     print(f"  To filled: {recipients}")
 
     # ── Fill Subject ───────────────────────────────────────────────────────
