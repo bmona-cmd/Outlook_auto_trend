@@ -207,6 +207,19 @@ def append_to_excel(data, dt=None):
     for col_idx, value in enumerate(new_row, start=1):
         ws.cell(row=target_row, column=col_idx, value=value)
 
+    # Apply border to every cell in the new row
+    thin_side = Side(style="thin", color="BFBFBF")
+    row_border = Border(
+        left=thin_side, right=thin_side,
+        top=thin_side,  bottom=thin_side
+    )
+    normal_font = Font(name="Arial", size=10)
+    for col_idx in range(1, len(COLUMNS) + 1):
+        cell = ws.cell(row=target_row, column=col_idx)
+        cell.border = row_border
+        if not cell.font or cell.font.name == "Calibri":
+            cell.font = normal_font
+
     # Highlight the row red if any critical extraction field is blank.
     # Critical fields: Customer (col3), Vertical (col4), Technology (col5),
     # Case Delivery Type (col6). Comments (col8) and EM (col7) are optional.

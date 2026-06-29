@@ -28,8 +28,9 @@ app = Flask(__name__)
 from collections import deque
 import datetime
 
-log_buffer = deque(maxlen=200)
+log_buffer = deque()
 log_lock   = threading.Lock()
+_scan_done_flag = False   # set to True when a scan cycle finishes; cleared by frontend poll
 
 def push_log(msg: str):
     ts   = datetime.datetime.now().strftime("%H:%M:%S")
@@ -44,8 +45,12 @@ _live_page        = None   # set by read_mails when browser opens
 _orig_print = builtins.print
 
 def _log_print(*args, **kwargs):
+    global _scan_done_flag
     msg = " ".join(str(a) for a in args)
     push_log(msg)
+    # Detect scan completion to trigger frontend notification
+    if "scan done:" in msg.lower() or "scan complete" in msg.lower():
+        _scan_done_flag = True
     _orig_print(*args, **kwargs)
 
 mail_reader.print  = _log_print
@@ -256,6 +261,7 @@ def api_stop():
 
 @app.route("/api/status")
 def api_status():
+    global _scan_done_flag
     alive = bool(automation_thread and automation_thread.is_alive())
     paused = getattr(mail_reader, "_paused", False)
     email_ready = alive and getattr(mail_reader, "_live_page", None) is not None
@@ -265,15 +271,21 @@ def api_status():
         logs = list(log_buffer)
     xl = latest_excel()
     sleeping = getattr(mail_reader, "_sleeping", False)
+    # Consume scan_done flag (one-shot — cleared after frontend reads it)
+    scan_done = _scan_done_flag
+    if _scan_done_flag:
+        _scan_done_flag = False
     return jsonify({
         "running":       mail_reader.RUNNING,
         "paused":        paused,
         "sleeping":      sleeping,
         "logs":          logs,
+        "log_count":     len(logs),
         "latest_file":   xl.name if xl else "—",
         "email":         email_status(),
         "email_sending": paused,
-        "email_ready":   sleeping and not paused
+        "email_ready":   sleeping and not paused,
+        "scan_done":     scan_done,
     })
 
 @app.route("/api/send_report", methods=["POST"])
@@ -842,7 +854,7 @@ def _startup():
     push_log("Web UI ready. Open http://localhost:5050 in your browser.")
 
 _startup()
-
+ 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)

@@ -307,6 +307,40 @@
     padding: 8px 28px; font-size: 11px; color: #cfd8d4;
     flex-shrink: 0;
   }
+
+  /* ── MODALS ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.52); z-index: 200;
+    align-items: center; justify-content: center;
+  }
+  .modal-box {
+    background: var(--panel); border-radius: 12px;
+    padding: 28px 32px; max-width: 460px; width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,.22);
+    position: relative;
+  }
+  .modal-box h2 { font-size: 17px; font-weight: 700; margin-bottom: 16px; }
+  .modal-close {
+    position: absolute; top: 14px; right: 18px;
+    background: none; border: none; font-size: 20px;
+    cursor: pointer; color: var(--muted); line-height: 1;
+  }
+  .scan-stat-grid {
+    display: grid; grid-template-columns: repeat(3,1fr); gap: 12px;
+    margin: 18px 0;
+  }
+  .scan-stat {
+    text-align: center; background: var(--soft);
+    border-radius: 8px; padding: 14px 8px;
+    border: 1px solid rgba(1,169,130,.18);
+  }
+  .scan-stat .num { font-size: 26px; font-weight: 700; color: var(--accent); }
+  .scan-stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-top: 4px; }
+  .help-section { margin-bottom: 14px; }
+  .help-section h3 { font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--accent); }
+  .help-section p, .help-section li { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .help-section ul { padding-left: 18px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -315,9 +349,11 @@
 <!-- HEADER -->
 <header>
   <h1>APAC ARC Weekend Cases Flow</h1>
-  <div class="status-pill">
-    <div class="status-dot" id="status-dot"></div>
-    <span id="status-text">Stopped</span>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div class="status-pill">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Stopped</span>
+    </div>
   </div>
 </header>
 
@@ -328,6 +364,7 @@
   <button onclick="showTab('devices',this)">Devices</button>
   <button onclick="showTab('email',this)">Email</button>
   <button onclick="showTab('charts',this)">Charts</button>
+  <button onclick="openHelp()" style="margin-left:auto;color:#01a982;border-bottom-color:transparent;font-weight:700;background:rgba(1,169,130,0.08);"> About tool</button>
 </nav>
 
 <main>
@@ -725,9 +762,17 @@ async function pollStatus() {
       syncWeeklyManagerSelection(d.email.recipients || []);
     }
 
-    if (d.logs.length !== lastLogCount) {
-      lastLogCount = d.logs.length;
+    if (d.scan_done) {
+      showScanDonePopup(d.logs);
+    }
+
+    // Use server-side log_count so we never miss entries even when buffer wraps
+    const serverCount = d.log_count || d.logs.length;
+    if (serverCount !== lastLogCount) {
+      lastLogCount = serverCount;
       const box = document.getElementById('log-box');
+      // Only auto-scroll if user is already near the bottom (within 80px)
+      const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
       box.innerHTML = '';
       d.logs.forEach(line => {
         const div = document.createElement('div');
@@ -742,7 +787,7 @@ async function pollStatus() {
         div.textContent = line;
         box.appendChild(div);
       });
-      box.scrollTop = box.scrollHeight;
+      if (nearBottom) box.scrollTop = box.scrollHeight;
     }
   } catch(e) {}
 }
@@ -750,7 +795,62 @@ async function pollStatus() {
 setInterval(pollStatus, 2000);
 pollStatus();
 
-// ── AUTOMATION ────────────────────────────────────────────────────────────
+// ── SCAN DONE POPUP ───────────────────────────────────────────────────────
+function showScanDonePopup(logs) {
+  // Extract saved/skipped/already counts from last scan done line
+  let saved = 0, skipped = 0, already = 0;
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const m = logs[i].match(/saved=(\d+).*?already=(\d+).*?skipped=(\d+)/i)
+           || logs[i].match(/saved=(\d+).*?skipped=(\d+)/i);
+    if (m) {
+      saved   = parseInt(m[1]) || 0;
+      already = parseInt(m[2]) || 0;
+      skipped = parseInt(m[3] || m[2]) || 0;
+      break;
+    }
+  }
+  // Play a short beep via Web Audio API
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.18);
+      osc.start(ctx.currentTime + i * 0.12);
+      osc.stop(ctx.currentTime + i * 0.12 + 0.2);
+    });
+  } catch(e) {}
+  // Show popup
+  const modal = document.getElementById('scan-done-modal');
+  if (!modal) return;
+  document.getElementById('scan-done-saved').textContent   = saved;
+  document.getElementById('scan-done-already').textContent = already;
+  document.getElementById('scan-done-skipped').textContent = skipped;
+  modal.style.display = 'flex';
+}
+function closeScanDoneModal() {
+  document.getElementById('scan-done-modal').style.display = 'none';
+}
+
+// ── HELP MODAL ────────────────────────────────────────────────────────────
+function openHelp() {
+  document.getElementById('help-modal').style.display = 'flex';
+}
+function closeHelp() {
+  document.getElementById('help-modal').style.display = 'none';
+}
+// Close modals on backdrop click
+document.addEventListener('click', function(e) {
+  if (e.target.id === 'scan-done-modal') closeScanDoneModal();
+  if (e.target.id === 'help-modal')      closeHelp();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { closeScanDoneModal(); closeHelp(); }
+});
 function openFolderModal() {
   document.getElementById('folder-modal').style.display = 'flex';
 }
@@ -1280,6 +1380,79 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
         ▶ Start
       </button>
     </div>
+  </div>
+</div>
+
+<!-- ── SCAN DONE MODAL ─────────────────────────────────────── -->
+<div class="modal-overlay" id="scan-done-modal">
+  <div class="modal-box" style="text-align:center">
+    <button class="modal-close" onclick="closeScanDoneModal()">✕</button>
+    <div style="font-size:36px;margin-bottom:8px">✅</div>
+    <h2>Scan Complete</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:4px">This cycle finished — next scan in ~1 min</p>
+    <div class="scan-stat-grid">
+      <div class="scan-stat">
+        <div class="num" id="scan-done-saved">0</div>
+        <div class="lbl">Saved</div>
+      </div>
+      <div class="scan-stat">
+        <div class="num" id="scan-done-already">0</div>
+        <div class="lbl">Already</div>
+      </div>
+      <div class="scan-stat">
+        <div class="num" id="scan-done-skipped">0</div>
+        <div class="lbl">Skipped</div>
+      </div>
+    </div>
+    <button class="btn btn-blue" onclick="closeScanDoneModal()" style="width:100%;margin-top:4px">OK</button>
+  </div>
+</div>
+
+<!-- ── HELP MODAL ─────────────────────────────────────────── -->
+<div class="modal-overlay" id="help-modal">
+  <div class="modal-box" style="max-width:520px;max-height:85vh;overflow-y:auto">
+    <button class="modal-close" onclick="closeHelp()">✕</button>
+    <h2>ℹ How to Use</h2>
+    <div class="help-section">
+      <h3>1 · Setup (first time only)</h3>
+      <ul>
+
+        <li>Add your team members in the <b>Email</b> tab and select the weekly EM.</li>
+        <li>Check the <b>Customers</b> tab — add any missing customer → vertical mappings.</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>2 · Starting the scan</h3>
+      <ul>
+        <li>Click <b>▶ Start</b> on the Dashboard. Choose inbox or a custom folder for Dispatch and Handover emails.</li>
+        <li>The automation opens Chrome and scans Outlook every 60 seconds.</li>
+        <li>A <b>popup notification</b> appears after each scan with saved/already/skipped counts.</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>3 · Excel output</h3>
+      <ul>
+        <li>Cases are written to <code>output/Weekend_Cases_Tracker.xlsx</code> — Sat or Sun sheet.</li>
+        <li>Rows highlighted <span style="background:#FFB3B3;padding:0 4px;border-radius:3px">red</span> have missing fields (Customer / Vertical / Technology / Delivery Type).</li>
+        <li>The <b>EM</b> column is populated from the manager selected in the Email tab.</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>4 · Sending the report</h3>
+      <ul>
+        <li>Click <b>✉ Send Report</b> at any time during the sleep window (between scans).</li>
+        <li>The report is also sent automatically after 18:30 IST on weekends.</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>5 · Tips</h3>
+      <ul>
+        <li>Duplicate cases are automatically skipped — each case# is only saved once per day.</li>
+        <li>Activity log shows up to 500 entries. Older entries are archived to <code>logs/automation.log</code>.</li>
+        <li>Download the latest Excel any time with the <b>⬇ Download Excel</b> button.</li>
+      </ul>
+    </div>
+    <button class="btn btn-blue" onclick="closeHelp()" style="width:100%;margin-top:8px">Got it</button>
   </div>
 </div>
 

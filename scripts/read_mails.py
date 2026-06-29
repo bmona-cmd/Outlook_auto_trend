@@ -378,33 +378,12 @@ def process_mail(page, el, row_text, idx):
 
     # Check if this exact case was already fully saved
     # (any delivery type) — avoid re-saving same case twice
-    if (
-        case_num
-        and
-        already_processed(f"{case_num}_handover")
-        and
-        not needs_technology_update
-    ):
-        print("       → already processed (handover)")
-        return "already"
-    if (
-        case_num
-        and
-        already_processed(f"{case_num}_dispatch p1")
-        and
-        not needs_technology_update
-    ):
-        print("       → already processed (dispatch p1)")
-        return "already"
-    if (
-        case_num
-        and
-        already_processed(f"{case_num}_dispatch p2")
-        and
-        not needs_technology_update
-    ):
-        print("       → already processed (dispatch p2)")
-        return "already"
+    if case_num and not needs_technology_update:
+        for suffix in ("handover", "dispatch p1", "dispatch p2", "unknown", ""):
+            key = f"{case_num}_{suffix}" if suffix else case_num
+            if already_processed(key):
+                print(f"       → already processed ({suffix or 'any'})")
+                return "already"
 
     # For no-case# mails use subject+time key
     sid = make_scan_sid(subject, row_text)
@@ -466,6 +445,9 @@ def process_mail(page, el, row_text, idx):
     fid = make_id(details, subject)
     mark_processed(sid)
     mark_processed(fid)
+    # Also mark bare case# so any re-forward of the same case is caught
+    if case_num:
+        mark_processed(case_num)
     logger.info(f"Processed: {subject}")
     print("       → SAVED ✓")
     return "saved"
