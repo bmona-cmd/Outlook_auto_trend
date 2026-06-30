@@ -80,11 +80,12 @@ def _click_first_visible(page, selectors, timeout=3000):
 # BUILD EMAIL BODY
 # ==========================================
 
-def build_body(day_name, date_str, excel_file, chart_paths):
+def build_body(day_name, date_str, excel_file, chart_paths, signer_name=""):
     chart_note = ""
     if chart_paths:
         names = ", ".join(p.name for p in chart_paths)
         chart_note = f"\nChart images attached: {names}\n"
+    signer = (signer_name or "Weekend Automation Bot").strip()
 
     if excel_file:
         return (
@@ -96,7 +97,7 @@ def build_body(day_name, date_str, excel_file, chart_paths):
             f"This email was sent automatically by the "
             f"Weekend Mail Automation.\n\n"
             f"Regards,\n"
-            f"Weekend Automation Bot"
+            f"{signer}"
         )
     return (
         f"Hi,\n\n"
@@ -105,7 +106,7 @@ def build_body(day_name, date_str, excel_file, chart_paths):
         f"This may mean no cases were processed today.\n"
         f"{chart_note}\n"
         f"Regards,\n"
-        f"Weekend Automation Bot"
+        f"{signer}"
     )
 
 
@@ -212,81 +213,113 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
         )
 
     # ── Fill To ───────────────────────────────────────────────────────────
-    suggestion_selectors = [
-        "div[role='option']",
-        "li[role='option']",
-        "div[role='listbox'] div[role='option']",
-        "div[aria-label*='suggestion']",
-        "button[role='option']",
-    ]
+    def focus_to_field():
+        for sel in to_selectors:
+            try:
+                loc = page.locator(sel).first
+                loc.wait_for(state="visible", timeout=5000)
+                loc.click(timeout=5000)
+                return True
+            except Exception:
+                continue
+        return False
 
-    for recipient in recipients:
-        # Refocus the To field. After picking a suggestion (click, not
-        # Enter), Outlook can take well over the original 3s to finish
-        # rebuilding the editor before it's interactable again — so retry
-        # with a longer per-attempt timeout instead of failing on the first
-        # miss.
-        focused_sel = None
-        for attempt in range(4):                  # up to ~4 x 6s ≈ 24s total
-            focused_sel = _click_first_visible(page, to_selectors, timeout=6000)
-            if focused_sel:
-                break
-            print(f"  To field not ready yet (attempt {attempt + 1}/4) — retrying...")
-            page.wait_for_timeout(1000)
+    def pick_recipient_suggestion(recipient):
+        option_selectors = [
+            "div[role='option']",
+            "li[role='option']",
+            "button[role='option']",
+            "div[role='listbox'] div[role='option']",
+        ]
+        wanted = recipient.lower()
+        fallback = None
 
-        if not focused_sel:
-            raise RuntimeError(f"Could not focus To field while adding {recipient}")
-
-        # Dismiss any leftover dropdown from the previous recipient so it
-        # can't be mistaken for the current one's suggestion below.
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-
-        # Outlook rebuilds the To editor after resolving each recipient, so
-        # type through the active keyboard focus instead of reusing a locator.
-        page.keyboard.type(recipient, delay=60)
-
-        # Poll for the autocomplete dropdown instead of a single fixed sleep.
-        # Outlook's render time varies (a few hundred ms up to ~2s), and a
-        # stale/leftover dropdown element can satisfy a one-shot count()
-        # check even when the *current* recipient's suggestion isn't ready
-        # yet — that mismatch is what was causing names to run together.
-        suggestion = None
-        for _ in range(10):                       # up to ~2s total
-            page.wait_for_timeout(200)
-            for sel in suggestion_selectors:
+        for _ in range(30):
+            page.wait_for_timeout(250)
+            for sel in option_selectors:
+                options = page.locator(sel)
                 try:
-                    loc = page.locator(sel).first
-                    if loc.count() > 0 and loc.is_visible():
-                        suggestion = loc
-                        break
+                    count = options.count()
                 except Exception:
                     continue
-            if suggestion:
-                break
 
-        if suggestion:
-            # Click the suggestion directly — far more reliable than a blind
-            # Enter press, which can land before the dropdown has taken
-            # keyboard focus and just insert a space/newline instead of
-            # committing a recipient chip.
+                for i in range(min(count, 8)):
+                    option = options.nth(i)
+                    try:
+                        if not option.is_visible():
+                            continue
+                        text = option.inner_text(timeout=500).lower()
+                        if fallback is None:
+                            fallback = option
+                        if wanted in text:
+                            option.click(timeout=3000)
+                            return True
+                    except Exception:
+                        continue
+
+        if fallback is not None:
             try:
-                suggestion.click(timeout=2000)
-                print(f"  Picked suggestion for: {recipient}")
+                fallback.click(timeout=3000)
+                return True
             except Exception:
-                page.keyboard.press("Enter")
-                print(f"  Suggestion click failed, fell back to Enter for: {recipient}")
+                pass
+        return False
+
+    def wait_for_recipient_chip(recipient, before_count):
+        recipient_text = recipient.lower()
+        chip_selectors = [
+            "span:has-text('@')",
+            "div:has-text('@')",
+            "button[aria-label*='Remove']",
+            "span[title*='@']",
+        ]
+
+        for _ in range(40):
+            page.wait_for_timeout(250)
+            try:
+                current = page.locator("span:has-text('@'), div:has-text('@')").count()
+                if current > before_count:
+                    return True
+            except Exception:
+                pass
+
+            for sel in chip_selectors:
+                try:
+                    loc = page.locator(sel).filter(has_text=recipient_text).first
+                    if loc.count() > 0 and loc.is_visible():
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    for recipient in recipients:
+        recipient = str(recipient).strip()
+        if not recipient:
+            continue
+
+        if not focus_to_field():
+            raise RuntimeError(f"Could not focus To field while adding {recipient}")
+
+        before_count = page.locator("span:has-text('@'), div:has-text('@')").count()
+        page.keyboard.type(recipient, delay=40)
+        print(f"  Typed recipient: {recipient}")
+
+        picked = pick_recipient_suggestion(recipient)
+        if picked:
+            # Outlook may render the resolved chip as a display name only
+            # instead of showing the raw email address. Give it time to
+            # finish resolving before moving to the next recipient.
+            page.wait_for_timeout(2500)
         else:
-            # No dropdown appeared — common when the typed text is already
-            # a fully valid, resolvable email address. Commit it directly.
             page.keyboard.press("Enter")
-            print(f"  No suggestion, confirmed typed: {recipient}")
+            if not wait_for_recipient_chip(recipient, before_count):
+                raise RuntimeError(f"Outlook did not resolve recipient: {recipient}")
 
-        # Give Outlook time to render the recipient as a confirmed chip
-        # and finish rebuilding the To editor before the next loop
-        # iteration tries to refocus and type the following name.
-        page.wait_for_timeout(1800)
+        print(f"  Added recipient chip: {recipient}")
 
+        page.wait_for_timeout(1000)
+
+    page.wait_for_timeout(800)
     print(f"  To filled: {recipients}")
 
     # ── Fill Subject ───────────────────────────────────────────────────────
@@ -337,7 +370,7 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
         print(f"  Files: {[Path(f).name for f in files_to_attach]}")
         attached = False
 
-        # Try attach button → Upload from computer
+        # ── Method 1: Attach button → Upload from computer ────────────────
         for attach_sel in [
             "button[aria-label='Attach']", "button[title='Attach']",
             "button:has-text('Attach')", "div[aria-label='Attach']",
@@ -363,8 +396,6 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
                             with page.expect_file_chooser(timeout=5000) as fc_info:
                                 opt.click(timeout=4000)
                             fc_info.value.set_files(files_to_attach)
-                            page.wait_for_timeout(5000)
-                            print("  Files attached ✓")
                             attached = True
                             break
                     except Exception:
@@ -372,46 +403,75 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
                 if attached:
                     break
 
-                # Some Outlook builds create a hidden file input after the
-                # Attach menu opens, without raising a file chooser event.
                 file_input = page.locator("input[type='file']").last
                 if file_input.count() > 0:
                     file_input.set_input_files(files_to_attach)
-                    page.wait_for_timeout(5000)
-                    print("  Files attached via file input ✓")
                     attached = True
                     break
             except Exception:
                 continue
 
-        # Fallback: set any existing file input directly, then try a chooser.
+        # ── Method 2: Direct file input ───────────────────────────────────
         if not attached:
             try:
                 file_input = page.locator("input[type='file']").last
                 if file_input.count() > 0:
                     file_input.set_input_files(files_to_attach)
-                    page.wait_for_timeout(5000)
-                    print("  Files attached via fallback input ✓")
                     attached = True
+                    print("  Files set via direct input")
             except Exception as e:
-                print(f"  Direct file input attach failed: {e}")
+                print(f"  Direct file input failed: {e}")
 
         if not attached:
-            try:
-                with page.expect_file_chooser(timeout=5000) as fc_info:
-                    page.evaluate(
-                        "() => { const i = document.querySelector('input[type=\"file\"]'); if(i) i.click(); }"
-                    )
-                fc_info.value.set_files(files_to_attach)
-                page.wait_for_timeout(5000)
-                print("  Files attached via fallback chooser ✓")
-                attached = True
-            except Exception as e:
-                print(f"  Attachment skipped: {e}")
+            print("  Warning: could not attach files — sending without attachments")
+        else:
+            # ── Wait for ALL attachments to finish uploading ───────────────
+            # Poll for attachment chips/progress bars to confirm upload
+            # completed. Outlook renders an attachment chip (with file name)
+            # or a progress indicator per file. We wait until we see at least
+            # one chip AND no spinners/progress bars remain.
+            print(f"  Waiting for {len(files_to_attach)} attachment(s) to upload...")
+            upload_confirmed = False
+            for wait_attempt in range(30):        # up to 60s (30 × 2s)
+                page.wait_for_timeout(2000)
+                # Check for progress indicators still running
+                spinners = page.locator(
+                    "[aria-label*='uploading'], [aria-label*='progress'], "
+                    "[class*='upload'][class*='progress'], "
+                    "div[class*='attachmentProgress']"
+                ).count()
+                # Check for rendered attachment chips (file name appears)
+                chips = page.locator(
+                    "div[class*='attachment'], span[class*='attachment'], "
+                    "div[aria-label*='.xlsx'], div[aria-label*='.png'], "
+                    "span[title*='.xlsx'], span[title*='.png'], "
+                    "div[data-testid*='attachment']"
+                ).count()
+                print(f"  Upload check {wait_attempt + 1}/30: chips={chips} spinners={spinners}")
+                if chips >= 1 and spinners == 0:
+                    print(f"  Attachments confirmed uploaded ({chips} chip(s) visible) ✓")
+                    upload_confirmed = True
+                    break
+                if wait_attempt >= 20 and chips == 0:
+                    # No chips after 40s — attachment may have failed silently
+                    print("  Warning: no attachment chips visible after 40s — proceeding anyway")
+                    break
+            if not upload_confirmed:
+                print("  Warning: could not confirm upload completion — sending anyway")
+            # Extra buffer after last chip appears before hitting Send
+            page.wait_for_timeout(2000)
+
+    else:
+        page.wait_for_timeout(1000)
 
     # ── Send ───────────────────────────────────────────────────────────────
-    # Wait a moment to ensure attachments have finished uploading
-    page.wait_for_timeout(3000)
+    # Confirm compose is still open before sending
+    compose_check = page.locator(
+        "div[aria-label='To'][contenteditable='true'], "
+        "input[aria-label='Subject']"
+    ).count()
+    if compose_check == 0:
+        raise RuntimeError("Compose window is no longer open — email may have been saved as draft accidentally")
 
     sent = False
 
@@ -425,25 +485,49 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
     ]:
         try:
             btn = page.locator(sel).first
-            if btn.count() > 0:
-                # Scroll into view and force-click to ensure it registers
-                btn.scroll_into_view_if_needed(timeout=2000)
-                btn.focus()
-                page.wait_for_timeout(300)
-                btn.click(force=True, timeout=5000)
-                page.wait_for_timeout(2000)
-                # Confirm compose window closed (means sent successfully)
-                still_open = page.locator("button[aria-label='Send'], button:has-text('Send')").count()
-                if still_open == 0:
+            if btn.count() == 0:
+                continue
+            btn.scroll_into_view_if_needed(timeout=2000)
+            btn.focus()
+            page.wait_for_timeout(500)
+            btn.click(force=True, timeout=5000)
+
+            # Poll for send confirmation — either:
+            #   (a) compose window closes (To field gone), OR
+            #   (b) "Message sent" toast appears
+            # Do NOT just check Send button disappearance — it can disappear
+            # briefly during re-render even when not sent.
+            for poll in range(15):              # up to 15s
+                page.wait_for_timeout(1000)
+                compose_gone = page.locator(
+                    "div[aria-label='To'][contenteditable='true']"
+                ).count() == 0
+                sent_toast = page.locator(
+                    "div[role='status']:has-text('sent'), "
+                    "div[role='alert']:has-text('sent'), "
+                    "span:has-text('Message sent'), "
+                    "div[class*='toast']:has-text('sent')"
+                ).count() > 0
+                if compose_gone or sent_toast:
                     sent = True
-                    print("  Email sent via button click ✓")
+                    print(f"  Email sent via button click ✓ (poll={poll+1}, toast={sent_toast})")
                     break
-                # Still open — try clicking again
-                btn.click(force=True, timeout=3000)
-                page.wait_for_timeout(2000)
+
+            if sent:
+                break
+
+            # Compose still open — try once more
+            print("  Send button clicked but compose still open — retrying...")
+            btn.click(force=True, timeout=3000)
+            page.wait_for_timeout(3000)
+            compose_gone = page.locator(
+                "div[aria-label='To'][contenteditable='true']"
+            ).count() == 0
+            if compose_gone:
                 sent = True
                 print("  Email sent via button click (2nd attempt) ✓")
                 break
+
         except Exception as e:
             print(f"  Send btn ({sel}): {e}")
             continue
@@ -488,7 +572,7 @@ def _send_via_outlook_web(page, recipients, subject, body, excel_file, chart_pat
 # MAIN — SEND REPORT
 # ==========================================
 
-def send_report(page=None, target_date=None):
+def send_report(page=None, target_date=None, signer_name=""):
     """
     page: the live Playwright page object from read_mails.py.
           Required — email is sent via Outlook Web.
@@ -522,7 +606,7 @@ def send_report(page=None, target_date=None):
         print("\nGenerating chart images...")
         chart_paths = _generate_charts()
 
-        body = build_body(day_name, date_str, excel_file, chart_paths)
+        body = build_body(day_name, date_str, excel_file, chart_paths, signer_name)
 
         print(f"\nSending report via Outlook Web...")
         print(f"  To:     {', '.join(recipients)}")

@@ -131,11 +131,24 @@ def within_window():
     return True
 
 
+def report_due_now(now):
+    if TEST_MODE:
+        return False
+    return (
+        now.weekday() in (5, 6)
+        and _report_sent_today != now.date()
+        and _mins(now.hour, now.minute) >= dispatch_end_mins()
+    )
+
+
 def sleep_while_running(seconds):
+    _wake_event.clear()
     for _ in range(seconds):
         if not RUNNING:
             return
-        time.sleep(1)
+        if _wake_event.wait(timeout=1):
+            _wake_event.clear()
+            return
 
 
 # ──────────────────────────────────────────
@@ -605,8 +618,8 @@ def run_one_scan(page):
                 break   # re-enter while True to get fresh rows locator
 
             if result == "stop":
-                print(f"\n  Stale mail reached — scan complete")
-                print(f"  Scan totals: saved={saved} already={already} skipped={skipped}")
+                print(f"\n  Stale mail reached — folder scan complete")
+                print(f"  Folder totals: saved={saved} already={already} skipped={skipped}")
                 return True
             elif result == "skipped":
                 skipped += 1
@@ -648,7 +661,7 @@ def run_one_scan(page):
                 pass
         last_count = new_count
 
-    print(f"\n  Scan done: saved={saved} already={already} skipped={skipped}")
+    print(f"\n  Folder scan done: saved={saved} already={already} skipped={skipped}")
     return True
 
 
@@ -860,7 +873,7 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                             )
                             _paused = True
                             try:
-                                send_report(page=page)
+                                send_report(page=page, signer_name=_em_name)
                             except Exception as _e:
                                 print(f"  Report send error: {_e}")
                             finally:
@@ -917,6 +930,31 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                     if not RUNNING:
                         break
 
+                    # ── Emit cycle-complete after BOTH folders are done ──
+                    # app.py watches for "scan done:" to fire the UI notification.
+                    # Emitting it here (not inside run_one_scan) ensures it only
+                    # fires once per full cycle, after dispatch + handover are both
+                    # processed — not mid-cycle after just the first folder.
+                    print(f"Scan done: both folders processed.")
+
+                    n = ist_now()
+                    if report_due_now(n):
+                        print(
+                            f"\n{'='*55}\n"
+                            f"REPORT TIME [{n.strftime('%H:%M')} IST]"
+                            f" — Sending report email...\n"
+                            f"{'='*55}"
+                        )
+                        _paused = True
+                        try:
+                            send_report(page=page, signer_name=_em_name)
+                        except Exception as _e:
+                            print(f"  Report send error: {_e}")
+                        finally:
+                            _paused = False
+                        _report_sent_today = n.date()
+                        print("  Automation resumed.\n")
+
                     n    = ist_now()
                     wake = n + timedelta(seconds=SLEEP_SECS)
                     print(
@@ -934,7 +972,7 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                         _paused = True
                         print("\n" + "="*55 + "\nSENDING REPORT (requested during sleep)\n" + "="*55)
                         try:
-                            send_report(page=page)
+                            send_report(page=page, signer_name=_em_name)
                         except Exception as _e:
                             print(f"  Report send error: {_e}")
                         finally:
