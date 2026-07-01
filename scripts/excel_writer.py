@@ -75,6 +75,30 @@ def _adjust_column_width(ws):
 
 
 def _rebuild_charts_sheet(wb):
+    # ── Same normalization as chart_exporter.py ──────────────────────────
+    _ACRONYMS = {"Emea": "EMEA", "Cfts": "CFTS", "Bngl": "BNGL"}
+    _ALIASES  = {
+        "entfin":            "Enterprise",
+        "cloud":             "Software",
+        "new dispatch p1":   "Dispatch P1",
+        "new dispatch p2":   "Dispatch P2",
+        "handover in":       "Handover",
+        "handover-in":       "Handover",
+    }
+
+    def _fix(val):
+        raw = str(val).replace("\xa0", "").strip()
+        if not raw or raw.lower() in ("nan", "none", "nat"):
+            return ""
+        norm  = " ".join(raw.lower().split())
+        alias = _ALIASES.get(norm)
+        if alias:
+            return alias
+        if norm.startswith("new ") and "dispatch" in norm:
+            return norm[4:].strip().title()
+        titled = raw.title()
+        return _ACRONYMS.get(titled, titled)
+
     frames = []
     for sheet_name in (SHEET_SATURDAY, SHEET_SUNDAY):
         if sheet_name not in wb.sheetnames:
@@ -85,7 +109,6 @@ def _rebuild_charts_sheet(wb):
             continue
         header = rows[0]
         data   = rows[1:]
-        # Deduplicate column names safely
         seen = {}
         clean_header = []
         for col in header:
@@ -97,6 +120,11 @@ def _rebuild_charts_sheet(wb):
                 seen[col_str] = 0
                 clean_header.append(col_str)
         df = pd.DataFrame(data, columns=clean_header).reset_index(drop=True)
+        # Normalise categories
+        for col in ("Vertical", "Technology", "Case Delivery Type"):
+            if col in df.columns:
+                df[col] = df[col].astype(str).apply(_fix)
+                df[col] = df[col].replace("", pd.NA)
         frames.append(df)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=COLUMNS)

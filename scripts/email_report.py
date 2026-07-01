@@ -579,7 +579,16 @@ def send_report(page=None, target_date=None, signer_name=""):
     """
     try:
         config     = load_config()
-        recipients = config.get("recipients", [])
+        disabled = {
+            str(email).strip().lower()
+            for email in config.get("disabled_recipients", [])
+        }
+        recipients = [
+            str(email).strip()
+            for email in config.get("recipients", [])
+            if str(email).strip()
+            and str(email).strip().lower() not in disabled
+        ]
 
         if not recipients:
             print("Email skipped: no recipients in email_config.json")

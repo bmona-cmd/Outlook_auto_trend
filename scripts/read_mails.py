@@ -748,33 +748,31 @@ def _navigate_to_folder(page, folder_name):
     """
     Navigate to a named folder in Outlook.
     - 'inbox' → clicks the Inbox item in the sidebar
-    - anything else → searches all sidebar items for a text match
+    - anything else → expands/scans the folder tree for a text match
     """
     target = (folder_name or "inbox").strip()
 
     print(f"  → Navigating to folder: '{target}'")
 
-    try:
-        # Expand the folder tree if it's collapsed
-        for expand_sel in [
-            "button[aria-label='Expand folders']",
-            "button[title='Expand folders']",
-            "[aria-label='Show folder list']",
-        ]:
+    def _click_if_visible(selectors, timeout=2000):
+        for sel in selectors:
             try:
-                btn = page.locator(expand_sel).first
-                if btn.count() > 0 and btn.is_visible():
-                    btn.click(timeout=2000)
-                    page.wait_for_timeout(1000)
-                    break
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=timeout):
+                    loc.click(timeout=timeout)
+                    page.wait_for_timeout(800)
+                    return True
             except Exception:
-                pass
+                continue
+        return False
 
-        # Build a list of selectors to try — from most specific to broadest
+    def _try_click_folder():
         selectors = [
             f"[aria-label='{target}']",
             f"[title='{target}']",
             f"div[role='treeitem']:has-text('{target}')",
+            f"a[role='treeitem']:has-text('{target}')",
+            f"button:has-text('{target}')",
             f"span:text-is('{target}')",
             f"div[role='option']:has-text('{target}')",
         ]
@@ -782,15 +780,85 @@ def _navigate_to_folder(page, folder_name):
         for sel in selectors:
             try:
                 loc = page.locator(sel).first
-                if loc.count() > 0 and loc.is_visible(timeout=2000):
+                if loc.count() > 0 and loc.is_visible(timeout=1500):
+                    loc.scroll_into_view_if_needed(timeout=2000)
                     loc.click(timeout=4000)
-                    page.wait_for_timeout(3000)
+                    page.wait_for_timeout(3500)
                     print(f"  → Folder '{target}' found and clicked ✓")
-                    return
+                    return True
             except Exception:
                 continue
 
-        # Last resort: iterate ALL treeitem elements and match text
+        try:
+            loc = page.get_by_text(target, exact=True).first
+            if loc.count() > 0 and loc.is_visible(timeout=1500):
+                loc.scroll_into_view_if_needed(timeout=2000)
+                loc.click(timeout=4000)
+                page.wait_for_timeout(3500)
+                print(f"  → Folder '{target}' found by exact text ✓")
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    try:
+        if target.lower() == "inbox":
+            try:
+                page.goto("https://outlook.office.com/mail/inbox", wait_until="domcontentloaded")
+                page.wait_for_timeout(5000)
+                print("  → Inbox opened ✓")
+                return
+            except Exception:
+                pass
+
+        # Expand/show the folder tree if Outlook has hidden custom folders.
+        _click_if_visible([
+            "button[aria-label='Expand folders']",
+            "button[title='Expand folders']",
+            "[aria-label='Show folder list']",
+            "button[aria-label='Show navigation pane']",
+            "button[title='Show navigation pane']",
+        ])
+        _click_if_visible([
+            "button:has-text('More')",
+            "span:has-text('More')",
+            "button:has-text('Folders')",
+            "div[role='button']:has-text('Folders')",
+            "[aria-label='More folders']",
+            "[title='More folders']",
+        ])
+
+        if _try_click_folder():
+            return
+
+        # Custom folders can be below the visible part of Outlook's folder tree.
+        tree = None
+        for tree_sel in [
+            "div[role='tree']",
+            "nav[aria-label*='folder']",
+            "div[aria-label*='folder']",
+            "div[aria-label*='Folder']",
+        ]:
+            try:
+                loc = page.locator(tree_sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=1000):
+                    tree = loc
+                    break
+            except Exception:
+                continue
+
+        if tree:
+            for _ in range(12):
+                if _try_click_folder():
+                    return
+                try:
+                    tree.evaluate("el => el.scrollBy(0, 350)")
+                    page.wait_for_timeout(500)
+                except Exception:
+                    break
+
+        # Last resort: iterate loaded tree items and match visible text.
         try:
             items = page.locator("div[role='treeitem'], a[role='treeitem']")
             count = items.count()

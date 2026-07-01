@@ -20,6 +20,7 @@ import scripts.email_report as email_report
 BASE_DIR     = Path(__file__).resolve().parent
 MAPPING_FILE = BASE_DIR / "customer_vertical_mapping.xlsx"
 DEVICE_FILE  = BASE_DIR / "data" / "custom_devices.json"
+DISABLED_DEVICE_FILE = BASE_DIR / "data" / "disabled_devices.json"
 OUTPUT_DIR   = BASE_DIR / "output"
 EMAIL_RE     = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -74,6 +75,22 @@ def load_custom_devices() -> dict:
 def save_custom_devices(data: dict):
     DEVICE_FILE.parent.mkdir(exist_ok=True)
     DEVICE_FILE.write_text(json.dumps(data, indent=2))
+
+def load_disabled_devices() -> set:
+    if not DISABLED_DEVICE_FILE.exists():
+        return set()
+    try:
+        return {
+            str(keyword).strip().lower()
+            for keyword in json.loads(DISABLED_DEVICE_FILE.read_text())
+            if str(keyword).strip()
+        }
+    except Exception:
+        return set()
+
+def save_disabled_devices(keywords: set):
+    DISABLED_DEVICE_FILE.parent.mkdir(exist_ok=True)
+    DISABLED_DEVICE_FILE.write_text(json.dumps(sorted(keywords), indent=2))
 
 def load_customers() -> list:
     if not MAPPING_FILE.exists():
@@ -174,13 +191,33 @@ def save_email_config(data: dict):
 
 def load_email_recipients() -> list:
     config = load_email_config()
+    disabled = {
+        str(email).strip().lower()
+        for email in config.get("disabled_recipients", [])
+    }
+    seen = set()
+    recipients = []
+    for email in config.get("recipients", []):
+        email = str(email).strip()
+        key = email.lower()
+        if email and key not in seen and key not in disabled:
+            recipients.append(email)
+            seen.add(key)
+    return recipients
+
+def load_all_email_recipients() -> list:
+    config = load_email_config()
+    disabled = {
+        str(email).strip().lower()
+        for email in config.get("disabled_recipients", [])
+    }
     seen = set()
     recipients = []
     for email in config.get("recipients", []):
         email = str(email).strip()
         key = email.lower()
         if email and key not in seen:
-            recipients.append(email)
+            recipients.append({"email": email, "enabled": key not in disabled})
             seen.add(key)
     return recipients
 
@@ -188,7 +225,7 @@ BUILTIN_DEVICES = {
     "mx":"Routing","ptx":"Routing","acx":"Routing",
     "srx":"Security","ssg":"Security",
     "qfx":"Switching","ex":"Switching",
-    "mist":"Wireless","128t":"SDWAN","software":"Software",
+    "mist":"Wireless","software":"Software",
 }
 
 
@@ -341,6 +378,10 @@ def api_send_report():
 def api_email_recipients():
     return jsonify(load_email_recipients())
 
+@app.route("/api/email_recipients/details")
+def api_email_recipient_details():
+    return jsonify(load_all_email_recipients())
+
 @app.route("/api/email_recipients", methods=["POST"])
 def api_add_email_recipient():
     data = request.get_json() or {}
@@ -353,13 +394,17 @@ def api_add_email_recipient():
         return jsonify({"ok": False, "msg": "Enter a valid email address"}), 400
 
     config = load_email_config()
-    recipients = load_email_recipients()
+    recipients = [item["email"] for item in load_all_email_recipients()]
 
     if email.lower() in {r.lower() for r in recipients}:
         return jsonify({"ok": False, "msg": "Recipient already exists"}), 400
 
     recipients.append(email)
     config["recipients"] = recipients
+    config["disabled_recipients"] = [
+        item for item in config.get("disabled_recipients", [])
+        if str(item).strip().lower() != email.lower()
+    ]
     save_email_config(config)
     push_log(f"Email recipient added: {email}")
     return jsonify({"ok": True})
@@ -369,7 +414,7 @@ def api_remove_email_recipient():
     data = request.get_json() or {}
     email = (data.get("email") or "").strip()
 
-    recipients = load_email_recipients()
+    recipients = [item["email"] for item in load_all_email_recipients()]
     kept = [r for r in recipients if r.lower() != email.lower()]
 
     if len(kept) == len(recipients):
@@ -377,8 +422,37 @@ def api_remove_email_recipient():
 
     config = load_email_config()
     config["recipients"] = kept
+    config["disabled_recipients"] = [
+        item for item in config.get("disabled_recipients", [])
+        if str(item).strip().lower() != email.lower()
+    ]
     save_email_config(config)
     push_log(f"Email recipient removed: {email}")
+    return jsonify({"ok": True})
+
+@app.route("/api/email_recipients/toggle", methods=["POST"])
+def api_toggle_email_recipient():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+    enabled = bool(data.get("enabled"))
+    recipients = [item["email"] for item in load_all_email_recipients()]
+
+    if email.lower() not in {item.lower() for item in recipients}:
+        return jsonify({"ok": False, "msg": "Recipient not found"}), 404
+
+    config = load_email_config()
+    disabled = {
+        str(item).strip().lower()
+        for item in config.get("disabled_recipients", [])
+        if str(item).strip()
+    }
+    if enabled:
+        disabled.discard(email.lower())
+    else:
+        disabled.add(email.lower())
+    config["disabled_recipients"] = sorted(disabled)
+    save_email_config(config)
+    push_log(f"Email recipient {'enabled' if enabled else 'disabled'}: {email}")
     return jsonify({"ok": True})
 
 
@@ -426,8 +500,9 @@ def api_add_customer():
 
 @app.route("/api/devices")
 def api_devices():
+    disabled = load_disabled_devices()
     builtin = [{"keyword": k, "technology": v, "source": "built-in"}
-               for k, v in BUILTIN_DEVICES.items()]
+               for k, v in BUILTIN_DEVICES.items() if k not in disabled]
     custom  = [{"keyword": k, "technology": v, "source": "custom"}
                for k, v in load_custom_devices().items()]
     return jsonify(builtin + custom)
@@ -450,6 +525,29 @@ def api_add_device():
     except Exception:
         pass
     push_log(f"Device added: {keyword} → {tech}")
+    return jsonify({"ok": True})
+
+@app.route("/api/devices/remove", methods=["POST"])
+def api_remove_device():
+    data = request.get_json() or {}
+    keyword = (data.get("keyword") or "").strip().lower()
+    customs = load_custom_devices()
+
+    if keyword in customs:
+        del customs[keyword]
+        save_custom_devices(customs)
+    elif keyword in BUILTIN_DEVICES:
+        disabled = load_disabled_devices()
+        disabled.add(keyword)
+        save_disabled_devices(disabled)
+    else:
+        return jsonify({"ok": False, "msg": "Device not found"}), 404
+    try:
+        from scripts import parser as p
+        p.DEVICE_TECH_MAP.pop(keyword, None)
+    except Exception:
+        pass
+    push_log(f"Device removed: {keyword}")
     return jsonify({"ok": True})
 
 
@@ -870,6 +968,8 @@ def api_monthly_compare():
 def _startup():
     try:
         from scripts import parser as p
+        for kw in load_disabled_devices():
+            p.DEVICE_TECH_MAP.pop(kw, None)
         for kw, tech in load_custom_devices().items():
             p.DEVICE_TECH_MAP[kw] = tech
     except Exception:

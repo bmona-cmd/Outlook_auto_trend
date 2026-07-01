@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>APAC ARC Weekend Cases Flow</title>
+<title>ARC Weekend Volume Tracker</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -287,6 +287,26 @@
   .badge-builtin { background: #eef1f0; color: var(--muted); }
   .badge-custom  { background: var(--soft); color: var(--acc2); border: 1px solid rgba(1,169,130,.35); }
   .table-action { padding: 6px 12px; font-size: 12px; }
+  .recipient-actions {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 18px; min-width: 190px;
+  }
+  .switch {
+    position: relative; display: inline-flex; align-items: center;
+    width: 42px; height: 24px; flex: 0 0 42px;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-slider {
+    position: absolute; inset: 0; cursor: pointer;
+    background: #aeb8b4; border-radius: 12px; transition: background .2s;
+  }
+  .switch-slider::before {
+    content: ""; position: absolute; width: 18px; height: 18px;
+    left: 3px; top: 3px; background: #fff; border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .2s;
+  }
+  .switch input:checked + .switch-slider { background: var(--success); }
+  .switch input:checked + .switch-slider::before { transform: translateX(18px); }
 
   /* ── TOAST ── */
   #toast {
@@ -348,7 +368,7 @@
 
 <!-- HEADER -->
 <header>
-  <h1>APAC ARC Weekend Cases Flow</h1>
+  <h1>ARC Weekend Volume Tracker</h1>
   <div style="display:flex;align-items:center;gap:16px">
     <div class="status-pill">
       <div class="status-dot" id="status-dot"></div>
@@ -380,7 +400,13 @@
         <button class="btn btn-red"   id="btn-stop"  onclick="stopAuto()" disabled>■ &nbsp;Stop</button>
         <div class="ctrl-sep"></div>
         <a class="btn btn-ghost" href="/api/download_excel" download>⬇ &nbsp;Download Excel</a>
-        <button class="btn btn-green" id="btn-send-email" onclick="sendReportEmail()">✉ &nbsp;Send Report</button>
+        <div class="em-selector-bar" style="margin-bottom:0;min-width:220px;">
+          <label>On-Duty EM</label>
+          <select id="em-dropdown" onchange="setWeeklyManagerFromDropdown(this.value)">
+            <option value="">— Select EM —</option>
+          </select>
+          <span class="em-hint" id="em-hint-text"></span>
+        </div>
       </div>
 
       <div class="dashboard-meta">
@@ -392,11 +418,6 @@
           <div class="label">Managers / report recipients</div>
           <div class="value" id="email-state">Checking…</div>
           <div class="subvalue" id="email-recipients">—</div>
-        </div>
-        <div class="info-card">
-          <div class="label">Selected EM this week</div>
-          <div class="value" id="weekly-manager-name">Not selected</div>
-          <div class="subvalue" id="weekly-manager-email">Choose one manager on the Email tab.</div>
         </div>
       </div>
 
@@ -423,7 +444,7 @@
         </div>
         <div class="form-group">
           <label>Vertical</label>
-          <input type="text" id="cust-vert" placeholder="e.g. Hyperscaler" />
+          <input type="text" id="cust-vert" placeholder="e.g. Telco" />
         </div>
         <div class="form-group">
           <label>Manager Responsible</label>
@@ -474,7 +495,7 @@
         </div>
         <button class="btn btn-green" onclick="addDevice()">+ Add</button>
       </div>
-      <p class="form-hint">Custom devices are saved to <code>data/custom_devices.json</code> and applied immediately to the running parser. Built-in devices cannot be removed.</p>
+      <p class="form-hint">Added and removed devices are saved permanently and applied immediately to the running parser.</p>
     </div>
 
     <div class="table-wrap">
@@ -492,17 +513,16 @@
 
   <!-- ════════════════════════════════
        PAGE: EMAIL
-       + EM dropdown at the top
+       + report recipient management
   ════════════════════════════════ -->
   <section class="page" id="tab-email">
 
-    <!-- EM selector dropdown — always at top -->
-    <div class="em-selector-bar">
-      <label>⭐ On-Duty EM this week</label>
-      <select id="em-dropdown" onchange="setWeeklyManagerFromDropdown(this.value)">
-        <option value="">— Select Escalation Manager —</option>
-      </select>
-      <span class="em-hint" id="em-hint-text">Select the EM responsible for this weekend's report.</span>
+    <div class="form-card" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px;">Send Weekend Report</div>
+        <div style="font-size:12px;color:var(--muted);">Sends the Excel tracker to all recipients below with charts attached.</div>
+      </div>
+      <button class="btn btn-green" id="btn-send-email" onclick="sendReportEmail()" style="white-space:nowrap;">✉ &nbsp;Send Report</button>
     </div>
 
     <div class="form-card">
@@ -524,7 +544,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Manager</th><th>Email Address</th><th>Action</th></tr>
+          <tr><th>Manager</th><th>Email Address</th><th>Send Email / Remove</th></tr>
         </thead>
         <tbody id="email-tbody">
           <tr><td colspan="4" class="muted" style="text-align:center;padding:24px">Loading…</td></tr>
@@ -590,7 +610,7 @@
 </main>
 
 <!-- FOOTER -->
-<footer>APAC ARC Weekend Cases Flow &nbsp;•&nbsp; Juniper BNG CFTS</footer>
+<footer>ARC Weekend Volume Tracker &nbsp;•&nbsp; Juniper BNG CFTS</footer>
 
 <!-- TOAST -->
 <div id="toast"></div>
@@ -791,6 +811,7 @@ async function pollStatus() {
           ? d.email.recipients.join(', ')
           : d.email.message;
       syncWeeklyManagerSelection(d.email.recipients || []);
+      rebuildEMDropdown(d.email.recipients || [], readManagerRoster());
     }
 
     if (d.scan_done) {
@@ -1018,10 +1039,7 @@ async function loadDevices() {
       <td>${esc(d.keyword)}</td>
       <td class="muted">${esc(d.technology)}</td>
       <td><span class="badge badge-${d.source === 'custom' ? 'custom' : 'builtin'}">${esc(d.source)}</span></td>
-      <td>${d.source === 'custom'
-        ? `<button class="btn btn-red table-action" onclick="removeDevice(${escAttrJs(d.keyword)})">Remove</button>`
-        : `<span class="muted" style="font-size:12px">Built-in</span>`
-      }</td>
+      <td><button class="btn btn-red table-action" onclick="removeDevice(${escAttrJs(d.keyword)})">Remove</button></td>
     </tr>`
   ).join('');
 }
@@ -1053,42 +1071,64 @@ async function removeDevice(keyword) {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({keyword})
   });
-  if (r.ok) {
-    const d = await r.json();
-    if (d.ok) {
-      toast(`Device '${keyword}' removed.`, 'ok');
-      loadDevices();
-      return;
-    }
-  }
-  // Fallback: backend may not have delete endpoint yet
-  toast(`Device '${keyword}' removed from view. Add a /api/devices/remove endpoint to persist.`, 'warn');
-  loadDevices();
+  const d = await r.json();
+  toast(d.ok ? `Device '${keyword}' removed.` : (d.msg || 'Failed to remove device.'), d.ok ? 'ok' : 'err');
+  if (d.ok) loadDevices();
 }
 
 // ── EMAIL RECIPIENTS ──────────────────────────────────────────────────────
 async function loadEmailRecipients() {
-  const r    = await fetch('/api/email_recipients');
+  const r    = await fetch('/api/email_recipients/details');
   const data = await r.json();
   const tb   = document.getElementById('email-tbody');
   const roster   = readManagerRoster();
   const selected = (roster.selectedEmail || '').trim().toLowerCase();
 
   // Rebuild the EM dropdown at the top of the Email tab
-  rebuildEMDropdown(data, roster);
+  rebuildEMDropdown(data.filter(item => item.enabled).map(item => item.email), roster);
 
   if (!data.length) {
     tb.innerHTML = '<tr><td colspan="3" class="muted" style="text-align:center;padding:24px">No email recipients added yet.</td></tr>';
     return;
   }
-  tb.innerHTML = data.map(email =>
+  tb.innerHTML = data.map(item => {
+    const email = item.email;
+    return (
     `<tr>
       <td>${esc(roster.names[String(email).toLowerCase()] || 'Unnamed manager')}</td>
       <td>${esc(email)}</td>
-      <td><button class="btn btn-red table-action" data-email="${escAttr(email)}" onclick="removeEmailRecipient(this.dataset.email)">Remove</button></td>
-    </tr>`
-  ).join('');
+      <td><div class="recipient-actions">
+        <label class="switch" title="${item.enabled ? 'Email enabled' : 'Email disabled'}">
+          <input type="checkbox" ${item.enabled ? 'checked' : ''} data-email="${escAttr(email)}"
+            onchange="toggleEmailRecipient(this.dataset.email, this.checked, this)">
+          <span class="switch-slider"></span>
+        </label>
+        <button class="btn btn-red table-action" data-email="${escAttr(email)}"
+          onclick="removeEmailRecipient(this.dataset.email)">Remove</button>
+      </div></td>
+    </tr>`);
+  }).join('');
   updateWeeklyManagerCard();
+}
+
+async function toggleEmailRecipient(email, enabled, checkbox) {
+  checkbox.disabled = true;
+  try {
+    const r = await fetch('/api/email_recipients/toggle', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, enabled})
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.msg || 'Update failed');
+    toast(`Email for '${email}' turned ${enabled ? 'on' : 'off'}.`, 'ok');
+    await loadEmailRecipients();
+    pollStatus();
+  } catch (e) {
+    checkbox.checked = !enabled;
+    checkbox.disabled = false;
+    toast(e.message || 'Failed to update recipient.', 'err');
+  }
 }
 
 async function addManagerRecipient() {
