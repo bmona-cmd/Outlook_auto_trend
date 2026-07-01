@@ -307,6 +307,20 @@
   }
   .switch input:checked + .switch-slider { background: var(--success); }
   .switch input:checked + .switch-slider::before { transform: translateX(18px); }
+  .folder-input-list { display: grid; gap: 8px; }
+  .folder-input-row { display: flex; align-items: center; gap: 8px; }
+  .folder-input-row input {
+    flex: 1; min-width: 0; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font: 13px var(--font); outline: none;
+  }
+  .folder-input-row input:focus {
+    border-color: var(--accent); box-shadow: 0 0 0 3px rgba(1,169,130,.14);
+  }
+  .folder-row-btn {
+    width: 36px; height: 36px; padding: 0; justify-content: center;
+    font-size: 21px; line-height: 1; flex: 0 0 36px;
+  }
 
   /* ── TOAST ── */
   #toast {
@@ -903,18 +917,57 @@ function toggleHandover() {
   const custom = document.querySelector('input[name="handover_type"]:checked').value === 'custom';
   document.getElementById('handover-folder-wrap').style.display = custom ? 'block' : 'none';
 }
+
+function addFolderInput(type, afterButton=null) {
+  const list = document.getElementById(type + '-folder-list');
+  const row = document.createElement('div');
+  row.className = 'folder-input-row';
+  row.innerHTML = `
+    <input type="text" class="folder-name-input" placeholder="Outlook folder name">
+    <button type="button" class="btn btn-green folder-row-btn" title="Add another folder"
+      onclick="addFolderInput('${type}', this)">+</button>
+    <button type="button" class="btn btn-red folder-row-btn" title="Remove this folder"
+      onclick="removeFolderInput(this)">×</button>`;
+  if (afterButton) afterButton.closest('.folder-input-row').after(row);
+  else list.appendChild(row);
+  refreshFolderRowButtons(list);
+  row.querySelector('input').focus();
+}
+
+function removeFolderInput(button) {
+  const list = button.closest('.folder-input-list');
+  button.closest('.folder-input-row').remove();
+  refreshFolderRowButtons(list);
+}
+
+function refreshFolderRowButtons(list) {
+  const rows = list.querySelectorAll('.folder-input-row');
+  rows.forEach(row => {
+    row.querySelector('.btn-red').style.display = rows.length > 1 ? 'inline-flex' : 'none';
+  });
+}
+
+function readFolderInputs(type) {
+  const folders = Array.from(
+    document.querySelectorAll(`#${type}-folder-list .folder-name-input`)
+  ).map(input => input.value.trim()).filter(Boolean);
+  return folders.filter((folder, index) =>
+    folders.findIndex(item => item.toLowerCase() === folder.toLowerCase()) === index
+  );
+}
+
 async function startAuto() {
   const dispatchType   = document.querySelector('input[name="dispatch_type"]:checked').value;
   const handoverType   = document.querySelector('input[name="handover_type"]:checked').value;
-  const dispatchFolder = dispatchType === 'custom'
-    ? document.getElementById('dispatch-folder-input').value.trim() : 'inbox';
-  const handoverFolder = handoverType === 'custom'
-    ? document.getElementById('handover-folder-input').value.trim() : 'inbox';
-  if (dispatchType === 'custom' && !dispatchFolder) {
-    toast('Please enter the Dispatch folder name.', 'err'); return;
+  const dispatchFolders = dispatchType === 'custom'
+    ? readFolderInputs('dispatch') : ['inbox'];
+  const handoverFolders = handoverType === 'custom'
+    ? readFolderInputs('handover') : ['inbox'];
+  if (!dispatchFolders.length) {
+    toast('Please enter at least one Dispatch folder.', 'err'); return;
   }
-  if (handoverType === 'custom' && !handoverFolder) {
-    toast('Please enter the Handover folder name.', 'err'); return;
+  if (!handoverFolders.length) {
+    toast('Please enter at least one Handover folder.', 'err'); return;
   }
 
   // Get selected EM name from the manager roster
@@ -927,14 +980,17 @@ async function startAuto() {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
-      dispatch_folder: dispatchFolder,
-      handover_folder: handoverFolder,
+      dispatch_folders: dispatchFolders,
+      handover_folders: handoverFolders,
       em_name: emName
     })
   });
   const d = await r.json();
   if (!d.ok) toast(d.msg, 'err');
-  else toast(`Starting — Dispatch: "${dispatchFolder}" | Handover: "${handoverFolder}" | EM: "${emName || 'none'}"`, 'ok');
+  else toast(
+    `Starting — Dispatch: ${dispatchFolders.join(', ')} | Handover: ${handoverFolders.join(', ')}`,
+    'ok'
+  );
 }
 
 async function stopAuto() {
@@ -1390,7 +1446,7 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
 <div id="folder-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:14px;padding:32px 36px;width:440px;max-width:95vw;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
     <h2 style="margin:0 0 4px;font-size:18px;font-weight:700;color:#111;">📁 Select Mail Folders</h2>
-    <p style="margin:0 0 22px;color:#666;font-size:13px;">Choose where your Dispatch and Handover mails live in Outlook.</p>
+    <p style="margin:0 0 22px;color:#666;font-size:13px;">Choose one or more Outlook folders for Dispatch and Handover mails.</p>
 
     <!-- DISPATCH -->
     <div style="margin-bottom:18px;">
@@ -1404,8 +1460,15 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
         </label>
       </div>
       <div id="dispatch-folder-wrap" style="display:none;">
-        <input id="dispatch-folder-input" type="text" placeholder="e.g. Dispatch Alerts"
-          style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;outline:none;color:#111;">
+        <div class="folder-input-list" id="dispatch-folder-list">
+          <div class="folder-input-row">
+            <input type="text" class="folder-name-input" placeholder="Outlook folder name">
+            <button type="button" class="btn btn-green folder-row-btn" title="Add another folder"
+              onclick="addFolderInput('dispatch', this)">+</button>
+            <button type="button" class="btn btn-red folder-row-btn" title="Remove this folder"
+              onclick="removeFolderInput(this)" style="display:none">×</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1421,8 +1484,15 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
         </label>
       </div>
       <div id="handover-folder-wrap" style="display:none;">
-        <input id="handover-folder-input" type="text" placeholder="e.g. Handover Cases"
-          style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;outline:none;color:#111;">
+        <div class="folder-input-list" id="handover-folder-list">
+          <div class="folder-input-row">
+            <input type="text" class="folder-name-input" placeholder="Outlook folder name">
+            <button type="button" class="btn btn-green folder-row-btn" title="Add another folder"
+              onclick="addFolderInput('handover', this)">+</button>
+            <button type="button" class="btn btn-red folder-row-btn" title="Remove this folder"
+              onclick="removeFolderInput(this)" style="display:none">×</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1474,14 +1544,14 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
       <h3>1 · Setup (first time only)</h3>
       <ul>
 
-        <li>Add your team members in the <b>Email</b> tab and select the weekly EM.</li>
+        <li>Add recipients in the <b>Email</b> tab and select the weekly EM.</li>
         <li>Check the <b>Customers</b> tab — add any missing customer → vertical mappings.</li>
       </ul>
     </div>
     <div class="help-section">
       <h3>2 · Starting the scan</h3>
       <ul>
-        <li>Click <b>▶ Start</b> on the Dashboard. Choose inbox or a custom folder for Dispatch and Handover emails.</li>
+        <li>Click <b>▶ Start</b> on the Dashboard. Choose inbox or use the <b>+</b> button to add multiple custom folders.</li>
         <li>The automation opens Chrome and scans Outlook every 60 seconds.</li>
         <li>A <b>popup notification</b> appears after each scan with saved/already/skipped counts.</li>
       </ul>

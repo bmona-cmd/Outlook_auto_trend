@@ -62,8 +62,8 @@ SLEEP_SECS = 60           # 1 min between scans
 RUNNING    = False
 
 # Folder config — set at start time via run_mail_reader()
-_dispatch_folder = "inbox"
-_handover_folder = "inbox"
+_dispatch_folders = ["inbox"]
+_handover_folders = ["inbox"]
 _em_name         = ""     # EM selected on Email tab, saved per row in Excel
 
 TIME_RE = re.compile(
@@ -882,8 +882,14 @@ def _navigate_to_folder(page, folder_name):
         print(f"  → Navigation error: {e} — scanning current view")
 
 
-def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""):
-    global RUNNING, _report_sent_today, _dispatch_folder, _handover_folder, _live_page, _em_name
+def run_mail_reader(
+    dispatch_folder="inbox",
+    handover_folder="inbox",
+    em_name="",
+    dispatch_folders=None,
+    handover_folders=None,
+):
+    global RUNNING, _report_sent_today, _dispatch_folders, _handover_folders, _live_page, _em_name
     global _send_requested, _paused, _sleeping
 
     RUNNING          = True
@@ -891,13 +897,31 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
     _paused          = False
     _sleeping        = False
     _wake_event.clear()
-    _dispatch_folder = (dispatch_folder or "inbox").strip()
-    _handover_folder = (handover_folder or "inbox").strip()
+    def normalize_folders(values, fallback):
+        values = values if isinstance(values, (list, tuple)) else [values]
+        folders = []
+        seen = set()
+        for value in values:
+            folder = str(value or "").strip()
+            key = folder.lower()
+            if folder and key not in seen:
+                folders.append(folder)
+                seen.add(key)
+        return folders or [fallback]
+
+    _dispatch_folders = normalize_folders(
+        dispatch_folders if dispatch_folders is not None else dispatch_folder,
+        "inbox",
+    )
+    _handover_folders = normalize_folders(
+        handover_folders if handover_folders is not None else handover_folder,
+        "inbox",
+    )
     _em_name         = (em_name or "").strip()
 
     print(f"\nFolder config:")
-    print(f"  Dispatch → '{_dispatch_folder}'")
-    print(f"  Handover → '{_handover_folder}'")
+    print(f"  Dispatch → {', '.join(_dispatch_folders)}")
+    print(f"  Handover → {', '.join(_handover_folders)}")
     print(f"  EM       → '{_em_name}'")
 
     browser = None
@@ -974,25 +998,28 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                     if not RUNNING:
                         break
 
-                    same_folder = _dispatch_folder.lower() == _handover_folder.lower()
+                    folders_to_scan = []
+                    folder_positions = {}
+                    for category, folders in (
+                        ("Dispatch", _dispatch_folders),
+                        ("Handover", _handover_folders),
+                    ):
+                        for folder in folders:
+                            key = folder.lower()
+                            if key in folder_positions:
+                                folders_to_scan[folder_positions[key]][0].append(category)
+                            else:
+                                folder_positions[key] = len(folders_to_scan)
+                                folders_to_scan.append(([category], folder))
 
-                    if same_folder:
-                        print(f"\n[Folder] Both in '{_dispatch_folder}' — single scan")
-                        _navigate_to_folder(page, _dispatch_folder)
+                    for categories, folder in folders_to_scan:
+                        if not RUNNING:
+                            break
+                        label = " + ".join(categories)
+                        print(f"\n[Folder] {label} → '{folder}'")
+                        _navigate_to_folder(page, folder)
                         _scroll_to_top(page)
                         if RUNNING:
-                            run_one_scan(page)
-                    else:
-                        print(f"\n[Folder] Dispatch → '{_dispatch_folder}'")
-                        _navigate_to_folder(page, _dispatch_folder)
-                        _scroll_to_top(page)
-                        if RUNNING:
-                            run_one_scan(page)
-
-                        if RUNNING:
-                            print(f"\n[Folder] Handover → '{_handover_folder}'")
-                            _navigate_to_folder(page, _handover_folder)
-                            _scroll_to_top(page)
                             run_one_scan(page)
 
                     if not RUNNING:
@@ -1003,7 +1030,10 @@ def run_mail_reader(dispatch_folder="inbox", handover_folder="inbox", em_name=""
                     # Emitting it here (not inside run_one_scan) ensures it only
                     # fires once per full cycle, after dispatch + handover are both
                     # processed — not mid-cycle after just the first folder.
-                    print(f"Scan done: both folders processed.")
+                    print(
+                        f"Scan done: {len(folders_to_scan)} configured "
+                        f"folder(s) processed."
+                    )
 
                     n = ist_now()
                     if report_due_now(n):

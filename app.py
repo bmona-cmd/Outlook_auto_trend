@@ -255,20 +255,33 @@ def api_start():
     if automation_thread and automation_thread.is_alive():
         return jsonify({"ok": False, "msg": "Already running"})
 
-    data             = request.get_json(silent=True) or {}
-    dispatch_folder  = data.get("dispatch_folder", "inbox").strip() or "inbox"
-    handover_folder  = data.get("handover_folder", "inbox").strip() or "inbox"
-    em_name          = data.get("em_name", "").strip()
+    data = request.get_json(silent=True) or {}
+
+    def folder_list(value):
+        values = value if isinstance(value, list) else [value]
+        folders = [str(item).strip() for item in values if str(item).strip()]
+        return folders or ["inbox"]
+
+    dispatch_folders = folder_list(
+        data.get("dispatch_folders", data.get("dispatch_folder", "inbox"))
+    )
+    handover_folders = folder_list(
+        data.get("handover_folders", data.get("handover_folder", "inbox"))
+    )
+    em_name = str(data.get("em_name", "")).strip()
 
     mail_reader.RUNNING = True
-    push_log(f"Automation started. Dispatch: '{dispatch_folder}' | Handover: '{handover_folder}' | EM: '{em_name}'")
+    push_log(
+        f"Automation started. Dispatch: {dispatch_folders} | "
+        f"Handover: {handover_folders} | EM: '{em_name}'"
+    )
 
     automation_thread = threading.Thread(
         target=mail_reader.run_mail_reader,
         kwargs={
-            "dispatch_folder": dispatch_folder,
-            "handover_folder": handover_folder,
-            "em_name":         em_name,
+            "dispatch_folders": dispatch_folders,
+            "handover_folders": handover_folders,
+            "em_name":          em_name,
         },
         daemon=True
     )
