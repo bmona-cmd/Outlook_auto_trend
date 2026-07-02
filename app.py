@@ -24,7 +24,9 @@ MAPPING_FILE = BASE_DIR / "customer_vertical_mapping.xlsx"
 DEVICE_FILE  = BASE_DIR / "data" / "custom_devices.json"
 DISABLED_DEVICE_FILE = BASE_DIR / "data" / "disabled_devices.json"
 OUTPUT_DIR   = BASE_DIR / "output"
-ACTIVITY_LOG_DIR = BASE_DIR / "logs"
+ACTIVITY_LOG_DIR   = BASE_DIR / "logs"
+ACTIVITY_LOG_FILE  = ACTIVITY_LOG_DIR / "activity.log"        # always today's log — single file
+
 EMAIL_RE     = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 app = Flask(__name__)
@@ -33,32 +35,40 @@ app = Flask(__name__)
 from collections import deque
 import datetime
 
-def _activity_log_file(day):
-    return ACTIVITY_LOG_DIR / f"activity-{day.isoformat()}.log"
-
-def _load_activity_log(day):
-    """Restore only the selected day's UI activity history."""
+def _load_activity_log_if_today():
+    """Restore today's log from disk if the file's first line (a date
+    stamp) matches today; otherwise discard it."""
     try:
-        log_file = _activity_log_file(day)
-        if log_file.exists():
-            return log_file.read_text(encoding="utf-8").splitlines()
+        if ACTIVITY_LOG_FILE.exists():
+            lines = ACTIVITY_LOG_FILE.read_text(encoding="utf-8").splitlines()
+            if lines and lines[0] == datetime.date.today().isoformat():
+                return lines[1:]   # drop the date-stamp line itself
     except Exception:
         pass
+    _clear_activity_log_files()
     return []
 
+def _clear_activity_log_files():
+    """Remove any on-disk log so the logs/ folder never accumulates."""
+    try:
+        ACTIVITY_LOG_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 _activity_log_date = datetime.date.today()
-log_buffer = deque(_load_activity_log(_activity_log_date))
+log_buffer = deque(_load_activity_log_if_today())
 log_lock   = threading.Lock()
 _scan_done_flag = False   # set to True when a scan cycle finishes; cleared by frontend poll
 
 def _rollover_activity_log_if_needed():
-    """Switch the UI to a fresh daily history at local midnight."""
+    """At local midnight: clear the UI history AND delete today's file
+    from disk, so a new file starts fresh and nothing piles up."""
     global _activity_log_date
     today = datetime.date.today()
     if today != _activity_log_date:
         _activity_log_date = today
         log_buffer.clear()
-        log_buffer.extend(_load_activity_log(today))
+        _clear_activity_log_files()
 
 def push_log(msg: str):
     ts   = datetime.datetime.now().strftime("%H:%M:%S")
@@ -66,12 +76,14 @@ def push_log(msg: str):
     with log_lock:
         _rollover_activity_log_if_needed()
         log_buffer.append(line)
-        # Keep the complete history in one append-only file per day.
+        # Persist to a single file for today only, so a server restart
+        # doesn't lose the day's activity. Overwritten fresh each new day.
         try:
             ACTIVITY_LOG_DIR.mkdir(exist_ok=True)
-            with _activity_log_file(_activity_log_date).open(
-                "a", encoding="utf-8"
-            ) as activity_file:
+            is_new_file = not ACTIVITY_LOG_FILE.exists()
+            with ACTIVITY_LOG_FILE.open("a", encoding="utf-8") as activity_file:
+                if is_new_file:
+                    activity_file.write(_activity_log_date.isoformat() + "\n")
                 activity_file.write(line + "\n")
         except Exception:
             # Logging must never interrupt the mail automation itself.
