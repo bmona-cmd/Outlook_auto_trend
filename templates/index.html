@@ -427,6 +427,14 @@
         <div class="info-card">
           <div class="label">Latest output file</div>
           <div class="value" id="latest-file">{{ latest_file }}</div>
+          <div class="subvalue" style="margin-top:10px;">
+            <button class="btn btn-ghost table-action" onclick="document.getElementById('excel-upload-input').click()">⬆ &nbsp;Upload corrected Excel</button>
+            <input type="file" id="excel-upload-input" accept=".xlsx" style="display:none"
+              onchange="uploadCorrectedExcel(this.files[0])">
+            <div style="margin-top:6px;font-size:11px;color:var(--muted);">
+              Fixed the red/amber rows in a downloaded copy? Upload it here to replace the tracker used for charts and reports.
+            </div>
+          </div>
         </div>
         <div class="info-card">
           <div class="label">Managers / report recipients</div>
@@ -434,6 +442,7 @@
           <div class="subvalue" id="email-recipients">—</div>
         </div>
       </div>
+
 
       <div class="dashboard-log-panel">
         <div class="log-label">Activity Log</div>
@@ -793,7 +802,7 @@ let lastLogCount = 0;
 
 async function pollStatus() {
   try {
-    const r = await fetch('/api/status');
+    const r = await fetch(`/api/status?logs_since=${lastLogCount}`);
     const d = await r.json();
 
     const dot  = document.getElementById('status-dot');
@@ -832,14 +841,18 @@ async function pollStatus() {
       showScanDonePopup(d.logs);
     }
 
-    // Use server-side log_count so we never miss entries even when buffer wraps
-    const serverCount = d.log_count || d.logs.length;
+    // Append only the newly received lines. The server keeps the full,
+    // persistent history, so refreshes and app restarts retain old activity.
+    const serverCount = d.log_count ?? d.logs.length;
     if (serverCount !== lastLogCount) {
-      lastLogCount = serverCount;
       const box = document.getElementById('log-box');
       // Only auto-scroll if user is already near the bottom (within 80px)
       const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-      box.innerHTML = '';
+      // If the server history was replaced, rebuild once from its beginning.
+      if (serverCount < lastLogCount || (d.log_start ?? lastLogCount) !== lastLogCount) {
+        box.innerHTML = '';
+        lastLogCount = 0;
+      }
       d.logs.forEach(line => {
         const div = document.createElement('div');
         div.className = 'log-line';
@@ -853,6 +866,7 @@ async function pollStatus() {
         div.textContent = line;
         box.appendChild(div);
       });
+      lastLogCount = serverCount;
       if (nearBottom) box.scrollTop = box.scrollHeight;
     }
   } catch(e) {}
@@ -995,6 +1009,43 @@ async function startAuto() {
 
 async function stopAuto() {
   await fetch('/api/stop', {method:'POST'});
+}
+
+// ── UPLOAD CORRECTED EXCEL ───────────────────────────────────────────────
+async function uploadCorrectedExcel(file) {
+  const input = document.getElementById('excel-upload-input');
+  if (!file) return;
+
+  if (!file.name.toLowerCase().endsWith('.xlsx')) {
+    toast('Please choose a .xlsx file.', 'err');
+    if (input) input.value = '';
+    return;
+  }
+
+  const ok = confirm(
+    'This will replace the main tracker file (Weekend_Cases_Tracker.xlsx) used for ' +
+    'charts and email reports with the file you selected. This cannot be undone.\n\n' +
+    `Upload "${file.name}" and use it going forward?`
+  );
+  if (!ok) { if (input) input.value = ''; return; }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  toast('Uploading corrected Excel…', 'ok');
+  try {
+    const r = await fetch('/api/upload_excel', { method: 'POST', body: formData });
+    const d = await r.json();
+    toast(d.msg || (d.ok ? 'Tracker updated.' : 'Upload failed.'), d.ok ? 'ok' : 'err');
+    if (d.ok) {
+      pollStatus();
+      if (document.getElementById('tab-charts').classList.contains('active')) loadCharts();
+    }
+  } catch (e) {
+    toast('Upload failed — check the server logs.', 'err');
+  } finally {
+    if (input) input.value = '';
+  }
 }
 
 async function sendReportEmail() {
@@ -1378,15 +1429,17 @@ async function loadCharts() {
     } else {
       if (statusNote) statusNote.textContent = `Showing ${series.labels.length} ${currentChartView} period(s) from file ${data.file || 'none'} (${data.total || 0} cases). Refreshes automatically while this tab is active.`;
     }
-    renderTrendChart('chart-vertical',  'Cases by Vertical',          series.vertical      || {}, series.date_ranges || {});
-    renderTrendChart('chart-technology','Cases by Technology',         series.technology    || {}, series.date_ranges || {});
-    renderTrendChart('chart-delivery',  'Cases by Case Delivery Type', series.delivery_type || {}, series.date_ranges || {});
+    renderTrendChart('chart-vertical',  'Cases by Vertical',          series.vertical      || {}, series.date_ranges || {}, currentChartView === 'weekly' ? 'bar' : 'line');
+    renderTrendChart('chart-technology','Cases by Technology',         series.technology    || {}, series.date_ranges || {}, currentChartView === 'weekly' ? 'bar' : 'line');
+    renderTrendChart('chart-delivery',  'Cases by Case Delivery Type', series.delivery_type || {}, series.date_ranges || {}, currentChartView === 'weekly' ? 'bar' : 'line');
   } catch (err) {
     toast('Failed to load chart data.', 'err');
   }
 }
 
-function renderTrendChart(canvasId, title, chartData, dateRanges) {
+function renderTrendChart(canvasId, title, chartData, dateRanges, chartType) {
+  // chartType: 'bar' for weekly (Sat/Sun grouped bars), 'line' for monthly
+  const useBar = (chartType === 'bar');
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -1401,6 +1454,15 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
   const defaultColors = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#70AD47','#5B9BD5','#C55A11'];
   const datasets = Object.entries(chartData.series || {}).map(([label, values], idx) => {
     const color = palette[label] || defaultColors[idx % defaultColors.length];
+    if (useBar) {
+      return {
+        label, data: values || [],
+        backgroundColor: color + 'CC',
+        borderColor: color,
+        borderWidth: 1,
+        borderRadius: 5,
+      };
+    }
     return {
       label, data: values || [], borderColor: color, backgroundColor: color + '33',
       tension: 0.35, fill: false, pointRadius: 5, pointHoverRadius: 7,
@@ -1410,14 +1472,15 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
   const chartFont = { family: getComputedStyle(document.body).fontFamily || 'Arial, sans-serif', size: 13 };
   if (!datasets.length) {
     chartInstances[canvasId] = new Chart(ctx, {
-      type: 'line', data: {labels:[], datasets:[]},
+      type: useBar ? 'bar' : 'line', data: {labels:[], datasets:[]},
       options: { plugins: { legend:{display:false}, title:{display:false,text:title,font:chartFont} },
                  scales: { x:{display:false}, y:{display:false} }, font: chartFont }
     });
     return;
   }
   chartInstances[canvasId] = new Chart(ctx, {
-    type: 'line', data: { labels, datasets },
+    type: useBar ? 'bar' : 'line',
+    data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false, font: chartFont,
       plugins: {
@@ -1560,7 +1623,7 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
       <h3>3 · Excel output</h3>
       <ul>
         <li>Cases are written to <code>output/Weekend_Cases_Tracker.xlsx</code> — Sat or Sun sheet.</li>
-        <li>Rows highlighted <span style="background:#FFB3B3;padding:0 4px;border-radius:3px">red</span> have missing fields (Customer / Vertical / Technology / Delivery Type).</li>
+        <li>Rows highlighted <span style="background:#FFB3B3;padding:0 4px;border-radius:3px">red</span> have missing fields (Case# / Customer / Vertical / Technology / Delivery Type).</li>
         <li>The <b>EM</b> column is populated from the manager selected in the Email tab.</li>
       </ul>
     </div>
@@ -1575,7 +1638,7 @@ function renderTrendChart(canvasId, title, chartData, dateRanges) {
       <h3>5 · Tips</h3>
       <ul>
         <li>Duplicate cases are automatically skipped — each case# is only saved once per day.</li>
-        <li>Activity log shows up to 500 entries. Older entries are archived to <code>logs/automation.log</code>.</li>
+        <li>Activity shows all entries for today. Complete daily histories are saved in dated files under <code>logs/</code>.</li>
         <li>Download the latest Excel any time with the <b>⬇ Download Excel</b> button.</li>
       </ul>
     </div>

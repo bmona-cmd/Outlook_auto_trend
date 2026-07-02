@@ -365,6 +365,73 @@ def is_pinned_row(el, text):
 
 
 # ──────────────────────────────────────────
+# PARTIAL ROW FALLBACK
+# ──────────────────────────────────────────
+# Used when a row is confirmed P1/P2 + dispatch/handover but
+# get_subject() couldn't cleanly parse a one-line subject (odd
+# Outlook row formatting, unusual punctuation, etc). Rather than
+# dropping the case entirely, pull Case# + delivery type straight
+# from the raw row text and save a minimal row. excel_writer already
+# highlights rows red when Customer/Vertical/Technology are blank,
+# so this surfaces the case for manual completion instead of silently
+# losing it.
+# ──────────────────────────────────────────
+
+def _save_partial_row(idx, row_text, priority_level=None):
+    case_match = re.search(r'\b(\d{4}-\d{3,5}-\d{4,})\b', row_text)
+    if not case_match:
+        # Nothing to anchor a row on — genuinely can't recover this one.
+        print(f"    [{idx}] subject extraction failed — no case# found, skipped")
+        return "skipped"
+
+    case_num = case_match.group(1)
+    hints = delivery_type_hints(row_text)
+
+    if "handover" in hints:
+        delivery_type = "Handover"
+    elif "dispatch" in hints:
+        delivery_type = f"Dispatch P{priority_level}" if priority_level else "Dispatch"
+    else:
+        delivery_type = ""
+
+    # Dedup — skip if this case# (under any known suffix) was already saved today.
+    for suffix in ("handover", "dispatch p1", "dispatch p2", "unknown", ""):
+        key = f"{case_num}_{suffix}" if suffix else case_num
+        if already_processed(key):
+            print(f"    [{idx}] subject extraction failed — case {case_num} already processed ({suffix or 'any'})")
+            return "already"
+
+    print(f"\n  [{idx}] subject extraction failed — saving partial row for manual review")
+    print(f"       → Case#: {case_num}")
+    print(f"       → Case Delivery Type: {delivery_type or '(unknown — fill in manually)'}")
+
+    details = {
+        "Date":              ist_now().strftime("%d-%b-%y"),
+        "Case#":             case_num,
+        "Customer":          "",
+        "Vertical":          "",
+        "Technology":        "",
+        "Case Delivery Type": delivery_type,
+        "EM":                _em_name,
+        "Comments":          "⚠ Subject extraction failed — verify Customer/Vertical/Technology manually",
+    }
+
+    saved_to_excel = append_to_excel(details)
+
+    fid = f"{case_num}_{delivery_type.lower()}" if delivery_type else f"{case_num}_unknown"
+    mark_processed(fid)
+    mark_processed(case_num)
+
+    if not saved_to_excel:
+        print("       → DUPLICATE — not saved")
+        return "already"
+
+    logger.info(f"Processed (partial — needs review): case {case_num}")
+    print("       → SAVED (partial — flagged red for review) ✓")
+    return "saved"
+
+
+# ──────────────────────────────────────────
 # PROCESS ONE MAIL
 # ──────────────────────────────────────────
 
@@ -374,7 +441,8 @@ def process_mail(page, el, row_text, idx):
       "saved"   – extracted and written to Excel
       "already" – already in processed_mails.json
       "skipped" – not relevant / P3-P5 / no case
-      "stop"    – row is before all report windows (caller stops scan)
+      "out_of_window" – today's row, but outside its delivery window
+      "stop"    – stale/no-time row; caller decides when to stop
     """
 
     # 1. Time check
@@ -382,7 +450,7 @@ def process_mail(page, el, row_text, idx):
     if ts == "stop":
         return "stop"
     if ts is False:
-        return "skipped"
+        return "out_of_window"
     # ts is True → row has a recognised today-time and is within window
 
     low = row_text.lower()
@@ -400,6 +468,7 @@ def process_mail(page, el, row_text, idx):
     # 3. P1/P2 only
     # Check for priority-change pattern first (P1>P2, P1->P2)
     # and use the RIGHT side as the current priority.
+    priority_level = None
     change_pm = re.search(
         r'\bP[1-5]\s*[-=]*>\s*(P([1-5]))\b',
         row_text,
@@ -410,17 +479,27 @@ def process_mail(page, el, row_text, idx):
         if level not in (1, 2):
             print(f"    [{idx}] P{level} (after change) — skipped")
             return "skipped"
+        priority_level = level
     else:
         pm = re.search(r'\bP([1-5])\b', row_text, re.IGNORECASE)
-        if pm and int(pm.group(1)) not in (1, 2):
-            print(f"    [{idx}] P{pm.group(1)} — skipped")
-            return "skipped"
+        if pm:
+            level = int(pm.group(1))
+            if level not in (1, 2):
+                print(f"    [{idx}] P{pm.group(1)} — skipped")
+                return "skipped"
+            priority_level = level
 
     # 4. Subject
+    # NOTE: by this point we already know the row is a P1/P2 dispatch or
+    # handover (steps 2 & 3 confirmed it). If get_subject() still can't
+    # pull a clean one-line subject (odd Outlook row formatting), don't
+    # throw the case away — fall back to pulling Case# + delivery type
+    # straight from the raw row text and save a partial row. excel_writer
+    # already highlights it red (Customer/Vertical/Technology blank) so
+    # it's easy to spot and fill in manually.
     subject = get_subject(row_text)
     if not subject:
-        print(f"    [{idx}] subject extraction failed")
-        return "skipped"
+        return _save_partial_row(idx, row_text, priority_level)
 
     print(f"\n  [{idx}] {subject}")
 
@@ -490,15 +569,11 @@ def process_mail(page, el, row_text, idx):
         mark_processed(sid)
         return "skipped"
 
-    if not details["Case#"] and details["Case Delivery Type"] != "Handover":
-        print("       → no Case# — skipped")
-        mark_processed(sid)
-        return "skipped"
+    if not details["Case#"]:
+        print("       → warning: no Case# extracted — row will be highlighted")
 
     if not details["Case Delivery Type"]:
-        print("       → no delivery type — skipped")
-        mark_processed(sid)
-        return "skipped"
+        print("       → warning: no delivery type extracted — row will be highlighted")
 
     # 9. Save
     print("       → saving:")
@@ -506,13 +581,16 @@ def process_mail(page, el, row_text, idx):
     for k, v in details.items():
         print(f"          {k}: {v}")
 
-    append_to_excel(details)
+    saved_to_excel = append_to_excel(details)
     fid = make_id(details, subject)
     mark_processed(sid)
     mark_processed(fid)
     # Also mark bare case# so any re-forward of the same case is caught
     if case_num:
         mark_processed(case_num)
+    if not saved_to_excel:
+        print("       → DUPLICATE — not saved")
+        return "already"
     logger.info(f"Processed: {subject}")
     print("       → SAVED ✓")
     return "saved"
@@ -532,7 +610,7 @@ def process_mail(page, el, row_text, idx):
 # Algorithm:
 #   while True:
 #     for each visible row (top → bottom):
-#       if pre-window → stop, return False
+#       skip stale/no-time rows without ending the folder scan
 #       process it
 #     scroll down one row-height
 #     if no new rows appeared → inbox bottom reached
@@ -549,6 +627,8 @@ def run_one_scan(page):
     processed_ids      = set()
     consecutive_no_new = 0
     max_no_new         = 20   # increased: Outlook re-renders same rows often
+    boundary_rows      = 0
+    max_boundary_rows  = 10   # tolerate a few odd Outlook rows, then stop
     last_count         = 0
 
     while True:
@@ -615,14 +695,22 @@ def run_one_scan(page):
                 _scroll_to_top(page)
                 page.wait_for_timeout(1500)
                 consecutive_no_new = 0
+                boundary_rows = 0
                 break   # re-enter while True to get fresh rows locator
 
-            if result == "stop":
-                print(f"\n  Stale mail reached — folder scan complete")
-                print(f"  Folder totals: saved={saved} already={already} skipped={skipped}")
-                return True
+            if result in ("stop", "out_of_window"):
+                skipped += 1
+                boundary_rows += 1
+                if boundary_rows >= max_boundary_rows:
+                    print(
+                        f"\n  Old/out-of-window boundary reached "
+                        f"({boundary_rows} rows) — folder scan complete"
+                    )
+                    print(f"  Folder totals: saved={saved} already={already} skipped={skipped}")
+                    return True
             elif result == "skipped":
                 skipped += 1
+                boundary_rows = 0
 
         if not found_new:
             consecutive_no_new += 1

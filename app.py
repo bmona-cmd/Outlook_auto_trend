@@ -6,12 +6,14 @@ Then open:  http://localhost:5050
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
+from werkzeug.utils import secure_filename
 from pathlib import Path
 import threading
 import json
 import builtins
 import re
 import time
+import shutil
 
 # ── project imports (unchanged) ──────────────────────────────────────────────
 import scripts.read_mails as mail_reader
@@ -22,6 +24,7 @@ MAPPING_FILE = BASE_DIR / "customer_vertical_mapping.xlsx"
 DEVICE_FILE  = BASE_DIR / "data" / "custom_devices.json"
 DISABLED_DEVICE_FILE = BASE_DIR / "data" / "disabled_devices.json"
 OUTPUT_DIR   = BASE_DIR / "output"
+ACTIVITY_LOG_DIR = BASE_DIR / "logs"
 EMAIL_RE     = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 app = Flask(__name__)
@@ -30,15 +33,49 @@ app = Flask(__name__)
 from collections import deque
 import datetime
 
-log_buffer = deque()
+def _activity_log_file(day):
+    return ACTIVITY_LOG_DIR / f"activity-{day.isoformat()}.log"
+
+def _load_activity_log(day):
+    """Restore only the selected day's UI activity history."""
+    try:
+        log_file = _activity_log_file(day)
+        if log_file.exists():
+            return log_file.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        pass
+    return []
+
+_activity_log_date = datetime.date.today()
+log_buffer = deque(_load_activity_log(_activity_log_date))
 log_lock   = threading.Lock()
 _scan_done_flag = False   # set to True when a scan cycle finishes; cleared by frontend poll
+
+def _rollover_activity_log_if_needed():
+    """Switch the UI to a fresh daily history at local midnight."""
+    global _activity_log_date
+    today = datetime.date.today()
+    if today != _activity_log_date:
+        _activity_log_date = today
+        log_buffer.clear()
+        log_buffer.extend(_load_activity_log(today))
 
 def push_log(msg: str):
     ts   = datetime.datetime.now().strftime("%H:%M:%S")
     line = f"[{ts}]  {msg}"
     with log_lock:
+        _rollover_activity_log_if_needed()
         log_buffer.append(line)
+        # Keep the complete history in one append-only file per day.
+        try:
+            ACTIVITY_LOG_DIR.mkdir(exist_ok=True)
+            with _activity_log_file(_activity_log_date).open(
+                "a", encoding="utf-8"
+            ) as activity_file:
+                activity_file.write(line + "\n")
+        except Exception:
+            # Logging must never interrupt the mail automation itself.
+            pass
 
 automation_thread = None
 _live_page        = None   # set by read_mails when browser opens
@@ -341,7 +378,14 @@ def api_status():
     if not alive and mail_reader.RUNNING:
         mail_reader.RUNNING = False
     with log_lock:
-        logs = list(log_buffer)
+        _rollover_activity_log_if_needed()
+        log_count = len(log_buffer)
+        try:
+            requested_start = int(request.args.get("logs_since", 0))
+            log_start = requested_start if 0 <= requested_start <= log_count else 0
+        except (TypeError, ValueError):
+            log_start = 0
+        logs = list(log_buffer)[log_start:]
     xl = latest_excel()
     sleeping = getattr(mail_reader, "_sleeping", False)
     # Consume scan_done flag (one-shot — cleared after frontend reads it)
@@ -353,7 +397,8 @@ def api_status():
         "paused":        paused,
         "sleeping":      sleeping,
         "logs":          logs,
-        "log_count":     len(logs),
+        "log_start":     log_start,
+        "log_count":     log_count,
         "latest_file":   xl.name if xl else "—",
         "email":         email_status(),
         "email_sending": paused,
@@ -479,6 +524,76 @@ def download_excel():
     if not xl:
         return jsonify({"error": "No Excel file found"}), 404
     return send_file(xl, as_attachment=True, download_name=xl.name)
+
+
+UPLOAD_REQUIRED_COLUMNS = {
+    "Date", "Case#", "Customer", "Vertical", "Technology", "Case Delivery Type"
+}
+
+
+@app.route("/api/upload_excel", methods=["POST"])
+def api_upload_excel():
+    """
+    Lets the user upload a manually-corrected copy of the tracker
+    (after fixing red/amber-highlighted rows) and makes it the new
+    live tracker file. Highlighting + the Charts tab are rebuilt
+    against the corrected data so future scans, charts, and email
+    reports all build on the fixed version instead of the original
+    mistakes.
+    """
+    if "file" not in request.files or not request.files["file"].filename:
+        return jsonify({"ok": False, "msg": "No file selected"}), 400
+
+    upload = request.files["file"]
+    filename = secure_filename(upload.filename)
+    if not filename.lower().endswith(".xlsx"):
+        return jsonify({"ok": False, "msg": "Please upload a .xlsx file"}), 400
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    tmp_path = OUTPUT_DIR / f".upload_tmp_{filename}"
+    try:
+        upload.save(tmp_path)
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"Could not save uploaded file: {e}"}), 400
+
+    # ── Validate structure before touching the live tracker file ──────────
+    try:
+        import pandas as pd
+        xl = pd.ExcelFile(tmp_path, engine="openpyxl")
+        data_sheets = [s for s in xl.sheet_names if s in ("Sat", "Sun")]
+        if not data_sheets:
+            raise ValueError("File must contain a 'Sat' and/or 'Sun' sheet")
+
+        for sheet in data_sheets:
+            df = pd.read_excel(tmp_path, sheet_name=sheet, engine="openpyxl", nrows=0)
+            missing = UPLOAD_REQUIRED_COLUMNS - {str(c).strip() for c in df.columns}
+            if missing:
+                raise ValueError(
+                    f"Sheet '{sheet}' is missing required column(s): {', '.join(sorted(missing))}"
+                )
+    except Exception as e:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return jsonify({"ok": False, "msg": f"Upload rejected — {e}"}), 400
+
+    # ── Overwrite the live tracker with the corrected file ────────────────
+    shutil.move(str(tmp_path), str(TRACKER_FILE))
+
+    # ── Re-apply red/amber highlighting and rebuild Charts tab ────────────
+    try:
+        from openpyxl import load_workbook
+        from scripts.excel_writer import _highlight_problem_rows, _rebuild_charts_sheet
+        wb = load_workbook(TRACKER_FILE)
+        _highlight_problem_rows(wb)
+        _rebuild_charts_sheet(wb)
+        wb.save(TRACKER_FILE)
+    except Exception as e:
+        push_log(f"Corrected Excel uploaded, but highlight/chart refresh failed: {e}")
+
+    push_log("Corrected Excel uploaded by user — tracker file replaced.")
+    return jsonify({"ok": True, "msg": "Tracker file updated."})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -682,6 +797,8 @@ def api_chart_data():
 
         combined = pd.concat(dfs, ignore_index=True)
         combined = combined[combined["Date"].notna()].copy()
+        # Keep ONLY Saturday (5) and Sunday (6) — ignore weekday test data
+        combined = combined[combined["Date"].dt.weekday.isin([5, 6])].copy()
 
         if combined.empty:
             return jsonify({
@@ -913,6 +1030,8 @@ def api_monthly_compare():
 
         combined = pd.concat(dfs, ignore_index=True)
         combined = combined[combined["Date"].notna()].copy()
+        # Keep ONLY Saturday (5) and Sunday (6)
+        combined = combined[combined["Date"].dt.weekday.isin([5, 6])].copy()
 
         if combined.empty:
             return jsonify({"months": [], "totals": [], "vertical": {}, "technology": {}, "delivery_type": {}})
